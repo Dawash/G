@@ -168,18 +168,19 @@ class OpenRouterProvider(ChatProvider):
     """OpenRouter API — supports many models."""
 
     BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
-    DEFAULT_MODEL = "gpt-3.5-turbo"
+    DEFAULT_MODEL = "google/gemini-2.0-flash-001"
 
-    def __init__(self, api_key, system_prompt):
+    def __init__(self, api_key, system_prompt, model=None):
         super().__init__(api_key, system_prompt)
         self.provider_name = "openrouter"
+        self.model = model or self.DEFAULT_MODEL
 
     def _call_api(self):
         response = requests.post(
             self.BASE_URL,
             headers={"Authorization": f"Bearer {self.api_key}"},
             json={
-                "model": self.DEFAULT_MODEL,
+                "model": self.model,
                 "messages": [
                     {"role": "system", "content": self.system_prompt},
                     *self.messages,
@@ -198,9 +199,10 @@ class OpenAIProvider(ChatProvider):
     BASE_URL = "https://api.openai.com/v1/chat/completions"
     DEFAULT_MODEL = "gpt-4o-mini"
 
-    def __init__(self, api_key, system_prompt):
+    def __init__(self, api_key, system_prompt, model=None):
         super().__init__(api_key, system_prompt)
         self.provider_name = "openai"
+        self.model = model or self.DEFAULT_MODEL
 
     def _call_api(self):
         response = requests.post(
@@ -210,7 +212,7 @@ class OpenAIProvider(ChatProvider):
                 "Content-Type": "application/json",
             },
             json={
-                "model": self.DEFAULT_MODEL,
+                "model": self.model,
                 "messages": [
                     {"role": "system", "content": self.system_prompt},
                     *self.messages,
@@ -229,9 +231,10 @@ class AnthropicProvider(ChatProvider):
     BASE_URL = "https://api.anthropic.com/v1/messages"
     DEFAULT_MODEL = "claude-sonnet-4-20250514"
 
-    def __init__(self, api_key, system_prompt):
+    def __init__(self, api_key, system_prompt, model=None):
         super().__init__(api_key, system_prompt)
         self.provider_name = "anthropic"
+        self.model = model or self.DEFAULT_MODEL
 
     def _call_api(self):
         response = requests.post(
@@ -242,7 +245,7 @@ class AnthropicProvider(ChatProvider):
                 "Content-Type": "application/json",
             },
             json={
-                "model": self.DEFAULT_MODEL,
+                "model": self.model,
                 "max_tokens": 1024,
                 "system": self.system_prompt,
                 "messages": self.messages,
@@ -254,7 +257,7 @@ class AnthropicProvider(ChatProvider):
         return data["content"][0]["text"]
 
 
-def create_provider(provider_name, api_key, system_prompt, ollama_model=None, ollama_url=None):
+def create_provider(provider_name, api_key, system_prompt, ollama_model=None, ollama_url=None, model=None):
     """Factory function — returns the right provider for the user's choice."""
     if provider_name == "ollama":
         return OllamaProvider(api_key, system_prompt, model=ollama_model or "qwen2.5:7b",
@@ -268,7 +271,7 @@ def create_provider(provider_name, api_key, system_prompt, ollama_model=None, ol
     cls = providers.get(provider_name)
     if not cls:
         raise ValueError(f"Unknown provider: {provider_name}. Use: ollama, {list(providers.keys())}")
-    return cls(api_key, system_prompt)
+    return cls(api_key, system_prompt, model=model)
 
 
 # --- Conversation storage (shared across providers) ---

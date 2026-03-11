@@ -256,9 +256,11 @@ def run(runtime_state=None):
     api_key = config["api_key"]
     ollama_model = config.get("ollama_model", "qwen2.5:7b")
     ollama_url = config.get("ollama_url", "http://localhost:11434")
+    cloud_model = config.get("cloud_model")
     system_prompt = get_system_prompt(uname, ainame)
     provider = create_provider(provider_name, api_key, system_prompt,
-                               ollama_model=ollama_model, ollama_url=ollama_url)
+                               ollama_model=ollama_model, ollama_url=ollama_url,
+                               model=cloud_model)
 
     # --- Language settings ---
     stt_engine = config.get("stt_engine", "whisper")
@@ -549,8 +551,10 @@ def run(runtime_state=None):
                 api_key = config["api_key"]
                 ollama_model = config.get("ollama_model", "qwen2.5:7b")
                 ollama_url = config.get("ollama_url", "http://localhost:11434")
+                cloud_model = config.get("cloud_model")
                 provider = create_provider(provider_name, api_key, system_prompt,
-                                           ollama_model=ollama_model, ollama_url=ollama_url)
+                                           ollama_model=ollama_model, ollama_url=ollama_url,
+                                           model=cloud_model)
                 brain = result[1]
                 _ss.dead_key_warned = False
                 _say(ainame, result[0])

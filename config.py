@@ -300,38 +300,98 @@ def _setup_new():
 
     api_key = ""
     ollama_model = ""
+    cloud_model = ""
     provider_name = ""
     providers_dict = {}
+
+    # --- FREE model selection (Ollama) ---
+    _OLLAMA_MODELS = {
+        "1": ("qwen2.5:7b",    "Qwen 2.5 7B",    "Best balance of speed & quality (recommended)"),
+        "2": ("qwen2.5:3b",    "Qwen 2.5 3B",    "Faster, lighter — good for older hardware"),
+        "3": ("llama3.1:8b",   "Llama 3.1 8B",   "Meta's model — strong general knowledge"),
+        "4": ("mistral:7b",    "Mistral 7B",      "Fast and efficient — good at coding"),
+        "5": ("gemma2:9b",     "Gemma 2 9B",      "Google's model — excellent reasoning"),
+        "6": ("phi3:3.8b",     "Phi-3 3.8B",      "Microsoft's small model — very fast"),
+        "7": ("deepseek-r1:7b", "DeepSeek R1 7B", "Strong at math and reasoning"),
+        "8": ("qwen2.5:14b",   "Qwen 2.5 14B",   "Larger model — smarter but needs 16GB+ RAM"),
+    }
 
     if tier in ("1", "3"):
         provider_name = "ollama"
         api_key = "ollama"
-        ollama_model = "qwen2.5:7b"
-        print(f"\n  Using Ollama with qwen2.5:7b (free, local)")
+
+        print(f"\n  Choose a free local model:\n")
+        for k, (model_id, name, desc) in _OLLAMA_MODELS.items():
+            rec = " (recommended)" if k == "1" else ""
+            print(f"  {k}. {name:<20s} — {desc}{rec}")
+        print()
+        ollama_choice = input("  Pick (1-8, default 1): ").strip() or "1"
+        if ollama_choice in _OLLAMA_MODELS:
+            ollama_model = _OLLAMA_MODELS[ollama_choice][0]
+        else:
+            ollama_model = "qwen2.5:7b"
+        print(f"\n  Using {ollama_model} (free, local)")
         print("  Make sure Ollama is installed and running (ollama serve)")
 
-        custom = input("  Different Ollama model? (press Enter for qwen2.5:7b): ").strip()
-        if custom:
-            ollama_model = custom
+    # --- PAID model selection (Cloud) ---
+    _OPENAI_MODELS = {
+        "1": ("gpt-4o-mini",   "GPT-4o Mini",   "Cheap & fast — great for daily use (recommended)"),
+        "2": ("gpt-4o",        "GPT-4o",        "Most capable — better reasoning, costs more"),
+        "3": ("gpt-4.1-mini",  "GPT-4.1 Mini",  "Latest mini model — improved coding"),
+        "4": ("gpt-4.1",       "GPT-4.1",       "Latest full model — best OpenAI quality"),
+    }
+    _ANTHROPIC_MODELS = {
+        "1": ("claude-sonnet-4-20250514", "Claude Sonnet 4",   "Best balance — smart & affordable (recommended)"),
+        "2": ("claude-haiku-4-5-20251001", "Claude Haiku 4.5", "Fastest & cheapest — good for quick tasks"),
+        "3": ("claude-opus-4-20250514",   "Claude Opus 4",     "Most powerful — best reasoning, premium price"),
+    }
+    _OPENROUTER_MODELS = {
+        "1": ("google/gemini-2.0-flash-001",     "Gemini 2.0 Flash",      "Very fast & cheap (recommended)"),
+        "2": ("google/gemini-2.5-pro-preview",    "Gemini 2.5 Pro",        "Google's best — excellent quality"),
+        "3": ("anthropic/claude-sonnet-4",         "Claude Sonnet 4",       "Anthropic via OpenRouter"),
+        "4": ("meta-llama/llama-3.1-70b-instruct", "Llama 3.1 70B",       "Meta's large model — free tier available"),
+        "5": ("deepseek/deepseek-r1",              "DeepSeek R1",          "Strong reasoning — very affordable"),
+        "6": ("mistralai/mistral-large-2411",      "Mistral Large",        "Mistral's flagship model"),
+    }
 
     if tier in ("2", "3"):
         print("\n  Which cloud provider?\n")
-        print("  1. OpenAI      (GPT-4o-mini — cheap, fast, very smart)")
-        print("  2. OpenRouter   (many models, pay-per-use)")
-        print("  3. Anthropic    (Claude Sonnet — excellent reasoning)\n")
+        print("  1. OpenAI       (GPT models — fast, reliable)")
+        print("  2. Anthropic    (Claude models — excellent reasoning)")
+        print("  3. OpenRouter   (many models — Gemini, Llama, DeepSeek, etc.)\n")
 
         paid_choice = input("  Pick (1/2/3): ").strip()
         while paid_choice not in ("1", "2", "3"):
             paid_choice = input("  Please pick 1, 2, or 3: ").strip()
 
-        paid_map = {"1": "openai", "2": "openrouter", "3": "anthropic"}
+        paid_map = {"1": "openai", "2": "anthropic", "3": "openrouter"}
         cloud_provider = paid_map[paid_choice]
         provider_info = {
             "openai": {"name": "OpenAI", "key_env": "OPENAI_API_KEY"},
-            "openrouter": {"name": "OpenRouter", "key_env": "OPENROUTER_API_KEY"},
             "anthropic": {"name": "Anthropic", "key_env": "ANTHROPIC_API_KEY"},
+            "openrouter": {"name": "OpenRouter", "key_env": "OPENROUTER_API_KEY"},
         }[cloud_provider]
 
+        # Model selection for the chosen provider
+        model_menu = {
+            "openai": _OPENAI_MODELS,
+            "anthropic": _ANTHROPIC_MODELS,
+            "openrouter": _OPENROUTER_MODELS,
+        }[cloud_provider]
+
+        print(f"\n  Choose a {provider_info['name']} model:\n")
+        for k, (model_id, name, desc) in model_menu.items():
+            rec = " (recommended)" if k == "1" else ""
+            print(f"  {k}. {name:<25s} — {desc}{rec}")
+        print()
+        model_choice = input(f"  Pick (1-{len(model_menu)}, default 1): ").strip() or "1"
+        if model_choice in model_menu:
+            cloud_model = model_menu[model_choice][0]
+        else:
+            cloud_model = model_menu["1"][0]
+        print(f"\n  Using {cloud_model}")
+
+        # API key
         env_key = os.environ.get(provider_info["key_env"], "")
         if env_key:
             cloud_key = env_key
@@ -344,7 +404,7 @@ def _setup_new():
             api_key = cloud_key
         else:
             # Both: Ollama primary, cloud as backup provider
-            providers_dict[cloud_provider] = {"api_key": cloud_key}
+            providers_dict[cloud_provider] = {"api_key": cloud_key, "model": cloud_model}
 
     # --- Step 4: Optional email ---
     print(f"\n  STEP 4: Email (optional — for sending emails via voice)\n")
@@ -399,6 +459,8 @@ def _setup_new():
     }
     if ollama_model:
         config["ollama_model"] = ollama_model
+    if cloud_model:
+        config["cloud_model"] = cloud_model
     if providers_dict:
         config["providers"] = providers_dict
     if email_address:
