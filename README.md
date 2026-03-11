@@ -103,7 +103,7 @@ Plan → Observe (screenshot) → Think → Act → Verify → Diagnose if faile
 
 ```bash
 # Clone the repository
-git clone https://github.com/dawasangaysherpa/G.git
+git clone https://github.com/Dawash/G.git
 cd G
 
 # Run the auto-launcher (handles everything)
