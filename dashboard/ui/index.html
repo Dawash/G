@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>G — AI Operating System</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;900&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+</head>
+<body>
+
+<canvas id="bgCanvas"></canvas>
+<div class="hex-grid"></div>
+<div class="scan-line"></div>
+<div class="scan-line scan-h"></div>
+<div class="vignette"></div>
+
+<!-- BOOT -->
+<div id="bootScreen" class="boot">
+    <div class="boot-reactor">
+        <div class="br r1"></div><div class="br r2"></div><div class="br r3"></div><div class="br r4"></div>
+        <div class="boot-core"></div>
+    </div>
+    <div class="boot-title" id="bootTitle">G</div>
+    <div class="boot-sub" id="bootSub">AI OPERATING SYSTEM</div>
+    <div class="boot-log" id="bootLog"></div>
+    <div class="boot-prog"><div class="boot-bar" id="bootBar"></div></div>
+</div>
+
+<!-- HUD -->
+<div id="hud" class="hud" style="display:none">
+
+    <!-- Top bar -->
+    <div class="top-bar">
+        <div class="tb-l">
+            <div class="tb-reactor" id="arcReactor"></div>
+            <span class="tb-brand" id="tbBrand">G</span>
+            <div class="tb-sep"></div>
+            <div id="micStateDot" style="width:8px;height:8px;border-radius:50%;background:#666;margin:0 6px;transition:background 0.3s" title="Mic: IDLE"></div>
+            <div class="voice-bars" id="voiceBars"><span></span><span></span><span></span><span></span><span></span></div>
+            <span class="tb-pill" id="statusPill">ONLINE</span>
+        </div>
+        <div class="tb-c">
+            <button class="tb-app" data-c="open google chrome" title="Chrome">&#127760;</button>
+            <button class="tb-app" data-c="open file explorer" title="Files">&#128193;</button>
+            <button class="tb-app" data-c="open notepad" title="Notes">&#128221;</button>
+            <button class="tb-app" data-c="open spotify" title="Music">&#127925;</button>
+            <button class="tb-app" data-c="open discord" title="Chat">&#128172;</button>
+            <button class="tb-app" data-c="open visual studio code" title="Code">&#128187;</button>
+        </div>
+        <div class="tb-r">
+            <span class="tb-metric">CPU <b id="tCpu">0</b>%</span>
+            <span class="tb-metric">RAM <b id="tRam">0</b>%</span>
+            <span class="tb-metric">GPU <b id="tGpu">0</b>%</span>
+            <span class="tb-time" id="topTime">00:00:00</span>
+            <button class="tb-btn" id="btnMic" title="Voice">&#127908;</button>
+            <button class="tb-btn" id="btnThink" title="Thinking Panel">&#129504;</button>
+            <button class="tb-btn" id="btnMin">&#9472;</button>
+            <button class="tb-btn" id="btnMax">&#9633;</button>
+            <button class="tb-btn tb-x" id="btnClose">&#10005;</button>
+        </div>
+    </div>
+
+    <!-- Main workspace -->
+    <div class="ws">
+
+        <!-- LEFT -->
+        <div class="col col-l">
+            <!-- System Status -->
+            <div class="hud-panel glow-border" data-label="SYSTEM STATUS">
+                <div class="bar-gauges">
+                    <div class="bg-row"><span class="bg-lbl">CPU</span><div class="bg-track"><div class="bg-fill" id="bgCpu"></div></div><span class="bg-val" id="bgCpuVal">0%</span></div>
+                    <div class="bg-row"><span class="bg-lbl">RAM</span><div class="bg-track"><div class="bg-fill" id="bgRam"></div></div><span class="bg-val" id="bgRamVal">0%</span></div>
+                    <div class="bg-row"><span class="bg-lbl">GPU</span><div class="bg-track"><div class="bg-fill" id="bgGpu"></div></div><span class="bg-val" id="bgGpuVal">0%</span></div>
+                    <div class="bg-row"><span class="bg-lbl">DISK</span><div class="bg-track"><div class="bg-fill" id="bgDisk"></div></div><span class="bg-val" id="bgDiskVal">0%</span></div>
+                </div>
+                <!-- CPU History Sparkline -->
+                <div class="sparkline-wrap">
+                    <canvas id="cpuSpark" width="220" height="32"></canvas>
+                    <span class="spark-lbl">CPU HISTORY</span>
+                </div>
+                <div class="data-rows">
+                    <div class="dr"><span>&#9650; UPLOAD</span><span id="netUp">0 KB/s</span></div>
+                    <div class="dr"><span>&#9660; DOWNLOAD</span><span id="netDown">0 KB/s</span></div>
+                    <div class="dr"><span>GPU TEMP</span><span id="gpuTemp">&mdash;</span></div>
+                    <div class="dr"><span>CORES</span><span id="cpuCores">&mdash;</span></div>
+                    <div class="dr"><span>UPTIME</span><span id="uptime">&mdash;</span></div>
+                </div>
+            </div>
+
+            <!-- Speedometer Gauges -->
+            <div class="speedo-panel">
+                <div class="speedo-wrap">
+                    <svg class="speedo" viewBox="0 0 200 130" id="speedoCpu">
+                        <defs>
+                            <linearGradient id="speedoGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="#00d4ff"/>
+                                <stop offset="50%" stop-color="#00ff88"/>
+                                <stop offset="75%" stop-color="#ff9500"/>
+                                <stop offset="100%" stop-color="#ff3b30"/>
+                            </linearGradient>
+                        </defs>
+                        <path class="speedo-track" d="M 20 115 A 80 80 0 0 1 180 115"/>
+                        <path class="speedo-fill" id="speedoCpuArc" d="M 20 115 A 80 80 0 0 0 20 115"/>
+                        <g id="speedoCpuTicks"></g>
+                        <line class="speedo-needle" id="speedoCpuNeedle" x1="100" y1="115" x2="100" y2="38" transform="rotate(-90,100,115)"/>
+                        <circle class="speedo-hub" cx="100" cy="115" r="6"/>
+                        <circle class="speedo-hub-inner" cx="100" cy="115" r="3"/>
+                        <text class="speedo-val" x="100" y="100" id="speedoCpuVal">0</text>
+                        <text class="speedo-unit" x="120" y="100">%</text>
+                        <text class="speedo-lbl" x="100" y="128">CPU</text>
+                    </svg>
+                </div>
+                <div class="speedo-wrap">
+                    <svg class="speedo" viewBox="0 0 200 130" id="speedoRam">
+                        <path class="speedo-track" d="M 20 115 A 80 80 0 0 1 180 115"/>
+                        <path class="speedo-fill" id="speedoRamArc" d="M 20 115 A 80 80 0 0 0 20 115"/>
+                        <g id="speedoRamTicks"></g>
+                        <line class="speedo-needle" id="speedoRamNeedle" x1="100" y1="115" x2="100" y2="38" transform="rotate(-90,100,115)"/>
+                        <circle class="speedo-hub" cx="100" cy="115" r="6"/>
+                        <circle class="speedo-hub-inner" cx="100" cy="115" r="3"/>
+                        <text class="speedo-val" x="100" y="100" id="speedoRamVal">0</text>
+                        <text class="speedo-unit" x="120" y="100">%</text>
+                        <text class="speedo-lbl" x="100" y="128">RAM</text>
+                    </svg>
+                </div>
+            </div>
+
+            <!-- Agents -->
+            <div class="hud-panel flex-1 glow-border" data-label="AGENT NETWORK">
+                <div class="agent-tabs">
+                    <button class="atab active" data-tab="agents">AGENTS</button>
+                    <button class="atab" data-tab="agentLog">COMMS</button>
+                </div>
+                <div class="agent-list" id="agentList">
+                    <div class="agent-idle">All agents standing by</div>
+                </div>
+                <div class="agent-log" id="agentLog" style="display:none"></div>
+            </div>
+        </div>
+
+        <!-- CENTER -->
+        <div class="col col-c">
+            <!-- Arc Reactor -->
+            <div class="reactor-wrap">
+                <svg class="reactor" viewBox="0 0 500 500" id="reactorSvg">
+                    <defs>
+                        <radialGradient id="coreGrad"><stop offset="0%" stop-color="#00d4ff" stop-opacity=".7"/><stop offset="50%" stop-color="#00d4ff" stop-opacity=".2"/><stop offset="100%" stop-color="#00d4ff" stop-opacity="0"/></radialGradient>
+                        <filter id="glow"><feGaussianBlur stdDeviation="4" result="g"/><feMerge><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+                        <linearGradient id="gCyan" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#00d4ff"/><stop offset="100%" stop-color="#0088cc"/></linearGradient>
+                    </defs>
+                    <circle class="ring ro" cx="250" cy="250" r="240" filter="url(#glow)"/>
+                    <g id="ticks"></g>
+                    <circle class="ring r1" cx="250" cy="250" r="220"/>
+                    <circle class="ring r2" cx="250" cy="250" r="195"/>
+                    <circle class="ring r3" cx="250" cy="250" r="170"/>
+                    <circle class="ring r4" cx="250" cy="250" r="145"/>
+                    <circle class="ring r5" cx="250" cy="250" r="120"/>
+                    <path class="deco-arc da1" d="M250,30 A220,220 0 0,1 470,250" fill="none"/>
+                    <path class="deco-arc da2" d="M250,470 A220,220 0 0,1 30,250" fill="none"/>
+                    <path class="deco-arc da3" d="M80,80 A210,210 0 0,1 420,80" fill="none"/>
+                    <path class="deco-arc da4" d="M420,420 A210,210 0 0,1 80,420" fill="none"/>
+                    <circle class="ring ri" cx="250" cy="250" r="95"/>
+                    <circle class="core-glow" cx="250" cy="250" r="70" fill="url(#coreGrad)"/>
+                    <text class="r-time" x="250" y="245" id="rTime">00:00</text>
+                    <text class="r-date" x="250" y="270" id="rDate">&mdash;</text>
+                </svg>
+                <div class="r-stat r-tl"><b id="rCpu">0%</b><span>CPU</span></div>
+                <div class="r-stat r-tr"><b id="rRam">0%</b><span>RAM</span></div>
+                <div class="r-stat r-bl"><b id="rGpu">0%</b><span>GPU</span></div>
+                <div class="r-stat r-br"><b id="rDisk">0%</b><span>DISK</span></div>
+            </div>
+
+            <!-- Thinking Panel (collapsible) -->
+            <div class="think-panel" id="thinkPanel">
+                <div class="think-header" id="thinkHeader">
+                    <span class="think-icon">&#129504;</span>
+                    <span class="think-title">THINKING</span>
+                    <span class="think-indicator" id="thinkIndicator"></span>
+                    <button class="think-toggle" id="thinkToggle">&#9660;</button>
+                </div>
+                <div class="think-body" id="thinkBody">
+                    <div class="think-log" id="thinkLog">
+                        <div class="think-idle">Waiting for input...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat -->
+            <div class="chat-zone">
+                <div class="chat-feed" id="chatFeed">
+                    <div class="chat-hint" id="chatHint">At your service. How may I help you today?</div>
+                </div>
+                <div class="thinking" id="thinking"><span class="td"></span><span class="td"></span><span class="td"></span><span class="tl">Processing...</span></div>
+                <div class="chat-bar">
+                    <input class="chat-in" id="chatIn" placeholder="Enter command..." autocomplete="off"/>
+                    <button class="chat-send" id="btnSend">&#10148;</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT -->
+        <div class="col col-r">
+            <!-- Weather -->
+            <div class="hud-panel glow-border" data-label="WEATHER">
+                <div id="wxContent" class="wx"><div class="wx-load">Acquiring data...</div></div>
+            </div>
+
+            <!-- News -->
+            <div class="hud-panel glow-border" data-label="NEWS FEED">
+                <div id="newsList" class="news"><div class="wx-load">Scanning feeds...</div></div>
+            </div>
+
+            <!-- Reminders -->
+            <div class="hud-panel glow-border" data-label="REMINDERS">
+                <div id="remindersList" class="reminders"><div class="rem-empty">No active reminders</div></div>
+            </div>
+
+            <!-- Command Matrix -->
+            <div class="hud-panel glow-border" data-label="COMMAND MATRIX">
+                <div class="cmd-grid">
+                    <button class="cmd" data-c="what's the weather"><div class="cmd-icon">&#9925;</div><span>WEATHER</span></button>
+                    <button class="cmd" data-c="latest news"><div class="cmd-icon">&#128240;</div><span>NEWS</span></button>
+                    <button class="cmd" data-c="take a screenshot and describe what you see"><div class="cmd-icon">&#128248;</div><span>VISION</span></button>
+                    <button class="cmd" data-c="run self test"><div class="cmd-icon">&#128269;</div><span>DIAG</span></button>
+                    <button class="cmd" data-c="what time is it"><div class="cmd-icon">&#128344;</div><span>TIME</span></button>
+                    <button class="cmd" data-c="open spotify"><div class="cmd-icon">&#127925;</div><span>MUSIC</span></button>
+                    <button class="cmd" data-c="research latest AI developments and summarize"><div class="cmd-icon">&#129302;</div><span>RESEARCH</span></button>
+                    <button class="cmd" data-c="set a reminder in 30 minutes to take a break"><div class="cmd-icon">&#9200;</div><span>REMIND</span></button>
+                </div>
+            </div>
+
+            <!-- Session Info -->
+            <div class="hud-panel glow-border" data-label="SESSION">
+                <div class="data-rows">
+                    <div class="dr"><span>PROVIDER</span><span id="sessProv">OLLAMA</span></div>
+                    <div class="dr"><span>MODEL</span><span id="sessModel">llama3.1</span></div>
+                    <div class="dr"><span>LATENCY</span><span id="sessLatency">&mdash;</span></div>
+                    <div class="dr"><span>MESSAGES</span><span id="sessMsgCount">0</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom bar -->
+    <div class="bot-bar">
+        <div class="bb-l">
+            <button class="media-btn" id="mediaPrev" title="Previous">&#9198;</button>
+            <button class="media-btn" id="mediaPlay" title="Play / Pause">&#9199;</button>
+            <button class="media-btn" id="mediaNext" title="Next">&#9197;</button>
+        </div>
+        <div class="bb-c">
+            <span class="bb-clock" id="bbClock">00:00</span>
+            <span class="bb-day" id="bbDay">&mdash;</span>
+            <span class="bb-full-date" id="bbDate">&mdash;</span>
+        </div>
+        <div class="bb-r">
+            <button class="bb-btn" data-c="open google chrome">&#127760; BROWSER</button>
+            <button class="bb-btn" data-c="open file explorer">&#128193; FILES</button>
+            <button class="bb-btn" data-c="open notepad">&#128196; NOTES</button>
+            <span class="bb-sep">|</span>
+            <span class="bb-latency" id="bbLatency">&mdash;</span>
+            <span class="bb-sep">|</span>
+            <span class="bb-queue" id="bbQueue"></span>
+            <button class="theme-btn" id="btnTheme" title="Cycle theme">&#9681;</button>
+            <button class="notif-btn" id="btnNotif" title="Notifications">&#128276;</button>
+            <span id="bbProv">OLLAMA</span>
+        </div>
+    </div>
+
+    <!-- Voice overlay -->
+    <div class="vo" id="voiceOverlay">
+        <div class="vo-circle"><div class="vo-r"></div><div class="vo-r vo-r2"></div><div class="vo-r vo-r3"></div><div class="vo-ico">&#127908;</div></div>
+        <div class="vo-st" id="voSt">Listening...</div>
+        <div class="vo-tx" id="voTx"></div>
+        <button class="vo-cancel" id="voCancel">CANCEL</button>
+    </div>
+
+    <!-- Drop zone -->
+    <div class="drop" id="dropOverlay"><div class="drop-r"></div><div class="drop-t">DROP FILES HERE</div></div>
+
+    <!-- Notification Center -->
+    <div class="notif-panel" id="notifPanel">
+        <div class="notif-header">NOTIFICATIONS <button class="notif-clear" id="notifClear">CLEAR</button></div>
+        <div class="notif-list" id="notifList"><div class="notif-empty">No notifications</div></div>
+    </div>
+
+    <!-- Chat search -->
+    <div class="search-bar" id="searchBar" style="display:none">
+        <input class="search-in" id="searchIn" placeholder="Search chat..." autocomplete="off"/>
+        <span class="search-count" id="searchCount"></span>
+        <button class="search-close" id="searchClose">&#10005;</button>
+    </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

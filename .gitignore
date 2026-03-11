@@ -1,0 +1,60 @@
+# === Credentials & Config (NEVER commit) ===
+config.json
+email_creds.json
+
+# === Databases ===
+*.db
+*.db-shm
+*.db-wal
+
+# === Runtime state & cache ===
+responses.json
+app_cache.json
+news_cache.json
+location_cache.json
+learned_hints.json
+session_state.json
+tool_memory.json
+custom_tools.json
+improvement_log.json
+brain_trace.json
+reminders.json
+alarms.json
+test_results.json
+
+# === Logs ===
+*.log
+*.log.*
+audit_log.jsonl
+debug_trace.txt
+debug_trace.txt.old
+
+# === Test logs ===
+test_*.log
+smart_tester.log
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# === Models (large binary files — users download on first run) ===
+models/whisper-base/
+models/piper/
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === OS ===
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# === Generated HTML/CSS from LLM ===
+calculator.html
+styles.css
+script.js

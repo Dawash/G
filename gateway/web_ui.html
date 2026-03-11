@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>G Assistant</title>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #14141f;
+    --surface2: #1c1c2e;
+    --accent: #6c5ce7;
+    --accent2: #a29bfe;
+    --text: #e8e8f0;
+    --text2: #8888a0;
+    --green: #00b894;
+    --red: #e17055;
+    --orange: #fdcb6e;
+    --radius: 16px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Header */
+  .header {
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--surface2);
+    flex-shrink: 0;
+  }
+  .header h1 {
+    font-size: 20px;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text2);
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--red);
+    transition: background 0.3s;
+  }
+  .status-dot.connected { background: var(--green); }
+
+  /* Quick Actions */
+  .quick-actions {
+    padding: 12px 16px;
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    flex-shrink: 0;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .quick-actions::-webkit-scrollbar { display: none; }
+  .quick-btn {
+    background: var(--surface2);
+    border: 1px solid #2a2a40;
+    color: var(--text);
+    padding: 8px 14px;
+    border-radius: 20px;
+    font-size: 13px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+  }
+  .quick-btn:active { background: var(--accent); transform: scale(0.95); }
+
+  /* Messages */
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+  }
+  .msg {
+    max-width: 85%;
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    font-size: 15px;
+    line-height: 1.5;
+    word-wrap: break-word;
+    animation: fadeIn 0.2s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } }
+  .msg.user {
+    align-self: flex-end;
+    background: var(--accent);
+    color: white;
+    border-bottom-right-radius: 4px;
+  }
+  .msg.assistant {
+    align-self: flex-start;
+    background: var(--surface);
+    border: 1px solid var(--surface2);
+    border-bottom-left-radius: 4px;
+  }
+  .msg.system {
+    align-self: center;
+    background: transparent;
+    color: var(--text2);
+    font-size: 12px;
+    padding: 4px 12px;
+  }
+  .msg.error {
+    align-self: center;
+    background: rgba(225, 112, 85, 0.15);
+    color: var(--red);
+    font-size: 13px;
+    padding: 8px 16px;
+    border: 1px solid rgba(225, 112, 85, 0.3);
+  }
+  .msg .time {
+    font-size: 11px;
+    color: var(--text2);
+    margin-top: 4px;
+  }
+  .msg.user .time { color: rgba(255,255,255,0.6); }
+  .typing {
+    align-self: flex-start;
+    padding: 12px 20px;
+    background: var(--surface);
+    border: 1px solid var(--surface2);
+    border-radius: var(--radius);
+    border-bottom-left-radius: 4px;
+  }
+  .typing span {
+    display: inline-block;
+    width: 8px; height: 8px;
+    background: var(--text2);
+    border-radius: 50%;
+    margin: 0 2px;
+    animation: bounce 1.4s infinite ease-in-out;
+  }
+  .typing span:nth-child(1) { animation-delay: 0s; }
+  .typing span:nth-child(2) { animation-delay: 0.2s; }
+  .typing span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+    40% { transform: scale(1); opacity: 1; }
+  }
+
+  /* Input */
+  .input-area {
+    padding: 12px 16px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    border-top: 1px solid var(--surface2);
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    flex-shrink: 0;
+    background: var(--bg);
+  }
+  .input-area textarea {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--surface2);
+    color: var(--text);
+    padding: 12px 16px;
+    border-radius: 24px;
+    font-size: 15px;
+    font-family: inherit;
+    resize: none;
+    min-height: 44px;
+    max-height: 120px;
+    outline: none;
+    transition: border-color 0.2s;
+    line-height: 1.4;
+  }
+  .input-area textarea:focus { border-color: var(--accent); }
+  .input-area textarea::placeholder { color: var(--text2); }
+  .send-btn {
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: none;
+    color: white;
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    flex-shrink: 0;
+  }
+  .send-btn:active { transform: scale(0.9); }
+  .send-btn:disabled { opacity: 0.4; }
+  .send-btn svg { width: 20px; height: 20px; }
+
+  /* Connection overlay */
+  .connect-overlay {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    z-index: 100;
+    transition: opacity 0.3s;
+  }
+  .connect-overlay.hidden { opacity: 0; pointer-events: none; }
+  .connect-overlay h2 {
+    font-size: 28px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .connect-overlay p { color: var(--text2); font-size: 14px; text-align: center; padding: 0 40px; }
+  .connect-overlay input {
+    background: var(--surface);
+    border: 1px solid var(--surface2);
+    color: var(--text);
+    padding: 14px 20px;
+    border-radius: 12px;
+    font-size: 15px;
+    width: 280px;
+    text-align: center;
+    outline: none;
+  }
+  .connect-overlay input:focus { border-color: var(--accent); }
+  .connect-overlay button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 14px 40px;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.2s;
+  }
+  .connect-overlay button:active { transform: scale(0.95); }
+  .connect-info { font-size: 12px; color: var(--text2); margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<!-- Connection Screen -->
+<div class="connect-overlay" id="connectOverlay">
+  <h2>G Assistant</h2>
+  <p>Connect to your PC to control G remotely</p>
+  <input type="text" id="hostInput" placeholder="PC IP address (e.g. 192.168.1.5)">
+  <input type="text" id="tokenInput" placeholder="Access token (if set)">
+  <button onclick="doConnect()">Connect</button>
+  <div class="connect-info" id="connectInfo"></div>
+</div>
+
+<!-- Main UI -->
+<div class="header">
+  <h1>G Assistant</h1>
+  <div class="status">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Disconnected</span>
+  </div>
+</div>
+
+<div class="quick-actions">
+  <button class="quick-btn" onclick="send('what time is it')">Time</button>
+  <button class="quick-btn" onclick="send('whats the weather')">Weather</button>
+  <button class="quick-btn" onclick="send('give me the news')">News</button>
+  <button class="quick-btn" onclick="send('how much ram am I using')">RAM</button>
+  <button class="quick-btn" onclick="send('cpu usage')">CPU</button>
+  <button class="quick-btn" onclick="send('disk space')">Disk</button>
+  <button class="quick-btn" onclick="send('show my alarms')">Alarms</button>
+  <button class="quick-btn" onclick="send('list reminders')">Reminders</button>
+  <button class="quick-btn" onclick="send('uptime')">Uptime</button>
+</div>
+
+<div class="messages" id="messages"></div>
+
+<div class="input-area">
+  <textarea id="input" placeholder="Ask G anything..." rows="1"
+    onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendInput()}"></textarea>
+  <button class="send-btn" id="sendBtn" onclick="sendInput()" disabled>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+      <path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/>
+    </svg>
+  </button>
+</div>
+
+<script>
+let ws = null;
+let msgId = 0;
+let reconnectTimer = null;
+
+const $ = id => document.getElementById(id);
+const msgs = $('messages');
+const input = $('input');
+const sendBtn = $('sendBtn');
+const overlay = $('connectOverlay');
+const statusDot = $('statusDot');
+const statusText = $('statusText');
+const connectInfo = $('connectInfo');
+
+// Auto-resize textarea
+input.addEventListener('input', () => {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+});
+
+// Try to load saved connection
+const saved = localStorage.getItem('g_host');
+if (saved) $('hostInput').value = saved;
+const savedToken = localStorage.getItem('g_token');
+if (savedToken) $('tokenInput').value = savedToken;
+
+function addMsg(text, type = 'assistant') {
+  const div = document.createElement('div');
+  div.className = `msg ${type}`;
+  const time = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  div.innerHTML = `${escapeHtml(text)}<div class="time">${time}</div>`;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  return div;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML.replace(/\n/g, '<br>');
+}
+
+function showTyping() {
+  const div = document.createElement('div');
+  div.className = 'typing';
+  div.id = 'typing';
+  div.innerHTML = '<span></span><span></span><span></span>';
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function hideTyping() {
+  const el = $('typing');
+  if (el) el.remove();
+}
+
+function setStatus(connected) {
+  statusDot.className = 'status-dot' + (connected ? ' connected' : '');
+  statusText.textContent = connected ? 'Connected' : 'Disconnected';
+  sendBtn.disabled = !connected;
+}
+
+function doConnect() {
+  const host = $('hostInput').value.trim();
+  const token = $('tokenInput').value.trim();
+  if (!host) { connectInfo.textContent = 'Enter your PC IP address'; return; }
+
+  localStorage.setItem('g_host', host);
+  if (token) localStorage.setItem('g_token', token);
+
+  connectInfo.textContent = 'Connecting...';
+  connect(host, token);
+}
+
+function connect(host, token) {
+  if (ws) { try { ws.close(); } catch(e){} }
+
+  const port = 8765;
+  const url = `ws://${host}:${port}`;
+
+  try {
+    ws = new WebSocket(url);
+  } catch(e) {
+    connectInfo.textContent = `Failed: ${e.message}`;
+    return;
+  }
+
+  ws.onopen = () => {
+    // Send auth if token provided
+    if (token) {
+      ws.send(JSON.stringify({id: 'auth', type: 'auth', token: token}));
+    }
+    setStatus(true);
+    overlay.classList.add('hidden');
+    addMsg('Connected to G', 'system');
+  };
+
+  ws.onmessage = (event) => {
+    hideTyping();
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === 'response') {
+        addMsg(data.text, 'assistant');
+      } else if (data.type === 'error') {
+        addMsg(data.text, 'error');
+      } else if (data.type === 'event') {
+        // Broadcast events (speaking, tool execution, etc.)
+        if (data.event === 'speaking') {
+          addMsg(data.text, 'assistant');
+        }
+      }
+    } catch(e) {
+      addMsg(event.data, 'assistant');
+    }
+  };
+
+  ws.onclose = () => {
+    setStatus(false);
+    addMsg('Disconnected', 'system');
+    // Auto-reconnect after 5 seconds
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        addMsg('Reconnecting...', 'system');
+        connect(host, token);
+      }
+    }, 5000);
+  };
+
+  ws.onerror = () => {
+    connectInfo.textContent = 'Connection failed. Check IP and make sure G is running.';
+    setStatus(false);
+  };
+}
+
+function send(text) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !text.trim()) return;
+
+  msgId++;
+  addMsg(text, 'user');
+  showTyping();
+
+  ws.send(JSON.stringify({
+    id: String(msgId),
+    type: 'think',
+    text: text.trim()
+  }));
+}
+
+function sendInput() {
+  const text = input.value.trim();
+  if (!text) return;
+  send(text);
+  input.value = '';
+  input.style.height = 'auto';
+}
+
+// Focus input on load (desktop)
+if (window.innerWidth > 768) input.focus();
+</script>
+</body>
+</html>
