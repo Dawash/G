@@ -23,6 +23,7 @@ EMAIL_CREDS_FILE = "email_creds.json"
 LOG_FILE = "assistant.log"
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
 
 PROVIDERS = {
     "1": {"name": "Ollama (Local)", "key_env": None, "needs_key": False},
@@ -305,31 +306,59 @@ def _setup_new():
     providers_dict = {}
 
     # --- FREE model selection (Ollama) ---
-    _OLLAMA_MODELS = {
-        "1": ("qwen2.5:7b",    "Qwen 2.5 7B",    "Best balance of speed & quality (recommended)"),
-        "2": ("qwen2.5:3b",    "Qwen 2.5 3B",    "Faster, lighter — good for older hardware"),
-        "3": ("llama3.1:8b",   "Llama 3.1 8B",   "Meta's model — strong general knowledge"),
-        "4": ("mistral:7b",    "Mistral 7B",      "Fast and efficient — good at coding"),
-        "5": ("gemma2:9b",     "Gemma 2 9B",      "Google's model — excellent reasoning"),
-        "6": ("phi3:3.8b",     "Phi-3 3.8B",      "Microsoft's small model — very fast"),
-        "7": ("deepseek-r1:7b", "DeepSeek R1 7B", "Strong at math and reasoning"),
-        "8": ("qwen2.5:14b",   "Qwen 2.5 14B",   "Larger model — smarter but needs 16GB+ RAM"),
+    # Detect available RAM to suggest appropriate models
+    _ram_gb = 0
+    try:
+        import psutil
+        _ram_gb = psutil.virtual_memory().total / (1024**3)
+    except Exception:
+        _ram_gb = 16  # assume decent system
+
+    _OLLAMA_MODELS_SMALL = {
+        "1": ("qwen2.5:7b",     "Qwen 2.5 7B",     "Best balance of speed & quality (recommended)"),
+        "2": ("qwen2.5:3b",     "Qwen 2.5 3B",     "Faster, lighter — good for older hardware"),
+        "3": ("llama3.1:8b",    "Llama 3.1 8B",    "Meta's model — strong general knowledge"),
+        "4": ("mistral:7b",     "Mistral 7B",       "Fast and efficient — good at coding"),
+        "5": ("gemma2:9b",      "Gemma 2 9B",       "Google's model — excellent reasoning"),
+        "6": ("phi3:3.8b",      "Phi-3 3.8B",       "Microsoft's small model — very fast"),
+        "7": ("deepseek-r1:7b", "DeepSeek R1 7B",  "Strong at math and reasoning"),
     }
+    _OLLAMA_MODELS_BIG = {
+        "8":  ("qwen2.5:14b",     "Qwen 2.5 14B",    "Smarter — needs 16GB+ RAM"),
+        "9":  ("llama3.1:70b",    "Llama 3.1 70B",   "Very smart — needs 48GB+ RAM"),
+        "10": ("qwen2.5:32b",     "Qwen 2.5 32B",    "Great quality — needs 32GB+ RAM"),
+        "11": ("qwen2.5:72b",     "Qwen 2.5 72B",    "Near GPT-4 quality — needs 48GB+ RAM"),
+        "12": ("deepseek-r1:32b", "DeepSeek R1 32B", "Excellent reasoning — needs 32GB+ RAM"),
+        "13": ("llama3.3:70b",    "Llama 3.3 70B",   "Meta's latest 70B — needs 48GB+ RAM"),
+        "14": ("mixtral:8x7b",    "Mixtral 8x7B",    "Mixture of experts — needs 32GB+ RAM"),
+        "15": ("command-r:35b",   "Command R 35B",   "Cohere's model — needs 32GB+ RAM"),
+    }
+
+    # Merge: always show small + show big only if user has enough RAM
+    _OLLAMA_MODELS = dict(_OLLAMA_MODELS_SMALL)
+    if _ram_gb >= 24:
+        _OLLAMA_MODELS.update(_OLLAMA_MODELS_BIG)
 
     if tier in ("1", "3"):
         provider_name = "ollama"
         api_key = "ollama"
 
-        print(f"\n  Choose a free local model:\n")
-        for k, (model_id, name, desc) in _OLLAMA_MODELS.items():
+        print(f"\n  Choose a free local model (you have {_ram_gb:.0f} GB RAM):\n")
+        print("  --- Standard (8-16 GB RAM) ---")
+        for k, (model_id, name, desc) in _OLLAMA_MODELS_SMALL.items():
             rec = " (recommended)" if k == "1" else ""
-            print(f"  {k}. {name:<20s} — {desc}{rec}")
+            print(f"  {k:>2}. {name:<22s} — {desc}{rec}")
+        if _ram_gb >= 24:
+            print(f"\n  --- Large (your {_ram_gb:.0f} GB RAM can handle these) ---")
+            for k, (model_id, name, desc) in _OLLAMA_MODELS_BIG.items():
+                print(f"  {k:>2}. {name:<22s} — {desc}")
         print()
-        ollama_choice = input("  Pick (1-8, default 1): ").strip() or "1"
+        max_opt = len(_OLLAMA_MODELS)
+        ollama_choice = input(f"  Pick (1-{max_opt}, default 1): ").strip() or "1"
         if ollama_choice in _OLLAMA_MODELS:
             ollama_model = _OLLAMA_MODELS[ollama_choice][0]
         else:
-            ollama_model = "qwen2.5:7b"
+            ollama_model = DEFAULT_OLLAMA_MODEL
         print(f"\n  Using {ollama_model} (free, local)")
         print("  Make sure Ollama is installed and running (ollama serve)")
 

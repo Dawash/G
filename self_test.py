@@ -118,8 +118,11 @@ def _test_reminders():
 def _test_brain():
     try:
         from brain import Brain, build_tool_definitions
+        from config import load_config, DEFAULT_OLLAMA_MODEL
+        cfg = load_config()
+        model = cfg.get("ollama_model", DEFAULT_OLLAMA_MODEL) if cfg else DEFAULT_OLLAMA_MODEL
         tools = build_tool_definitions()
-        Brain("ollama", "ollama", "test", "G", {}, ollama_model="qwen2.5:7b")
+        Brain("ollama", "ollama", "test", "G", {}, ollama_model=model)
         return True, f"{len(tools)} tools"
     except Exception as e:
         return False, str(e)

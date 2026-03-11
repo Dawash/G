@@ -152,9 +152,15 @@ class DesktopAgent:
     _active_instance = None  # Track running agent for emergency stop
 
     def __init__(self, action_registry, reminder_mgr=None,
-                 ollama_model="qwen2.5:7b", speak_fn=None):
+                 ollama_model=None, speak_fn=None):
         self.action_registry = action_registry
         self.reminder_mgr = reminder_mgr
+        if ollama_model is None:
+            try:
+                from config import load_config, DEFAULT_OLLAMA_MODEL
+                ollama_model = load_config().get("ollama_model", DEFAULT_OLLAMA_MODEL)
+            except Exception:
+                ollama_model = "qwen2.5:7b"
         self.ollama_model = ollama_model
         self.speak_fn = speak_fn
         self._history = []         # Full action history for context
@@ -767,7 +773,7 @@ class DesktopAgent:
                             "tool": fix["fix_action"], "args": fix.get("fix_args", {}),
                             "result": str(fix_result)[:300], "plan_step": f"FIX: {current_step}",
                         })
-                        fix_screen = self._observe(goal)
+                        fix_screen = self._observe(goal, use_vision=True)
                         fix_verify = self._verify_step(current_step, fix_result, fix_screen)
                         if fix_verify["verified"]:
                             step_fixed = True
@@ -788,7 +794,7 @@ class DesktopAgent:
                                 "tool": alt_tool, "args": alt_args,
                                 "result": str(alt_result)[:300], "plan_step": f"ALT: {current_step}",
                             })
-                            alt_screen = self._observe(goal)
+                            alt_screen = self._observe(goal, use_vision=True)
                             alt_verify = self._verify_step(current_step, alt_result, alt_screen)
                             if alt_verify["verified"]:
                                 step_fixed = True
@@ -2089,68 +2095,136 @@ class DesktopAgent:
         except Exception:
             return []
 
-    def _observe(self, goal):
-        """
-        Build comprehensive screen state using OS-level info as ground truth,
-        with optional llava vision for contextual understanding.
+    # ------------------------------------------------------------------
+    # Vision-need detection — returns True only for explicitly visual tasks
+    # ------------------------------------------------------------------
 
-        OS-level info (fast, reliable): window titles, process list, active window.
-        Vision (slow, contextual): only on first 2 turns, every 3rd turn, or when stuck.
-        """
-        from vision import (
-            capture_screenshot, image_to_base64, _call_llava,
-            get_active_window_title,
-        )
+    _VISUAL_PATTERNS = re.compile(
+        r"find\s+(the\s+)?(red|blue|green|yellow|orange|white|black|grey|gray|purple|pink)?\s*"
+        r"(button|icon|image|picture|logo|element|widget|badge|banner|avatar|thumbnail)"
+        r"|what('s| is)\s+on\s+(the\s+)?screen"
+        r"|what\s+do\s+(you|i)\s+see"
+        r"|look\s+at\s+(the\s+)?screen"
+        r"|click\s+(the\s+)?(image|picture|icon|logo|avatar|thumbnail)"
+        r"|describe\s+(the\s+)?screen"
+        r"|read\s+(the\s+)?text\s+(on|from)\s+(the\s+)?screen"
+        r"|screenshot"
+        r"|visual(ly)?"
+        r"|color|colour"
+        r"|pixel"
+        r"|appears?\s+(on|in)\s+(the\s+)?screen",
+        re.IGNORECASE,
+    )
 
-        image = capture_screenshot()
-        if image is None:
-            return {"summary": "Could not capture screenshot", "blocked": False,
-                    "foreground": "unknown", "raw": "", "windows": [], "processes": []}
+    def _vision_needed(self, goal):
+        """Return True only for tasks that explicitly require visual inspection.
+
+        Examples that return True:
+          - "find the red button"
+          - "what's on screen"
+          - "click the image of the logo"
+          - "describe the screen"
+
+        Examples that return False:
+          - "open Chrome and search for Python"
+          - "play a song on Spotify"
+          - "create a file on the desktop"
+        """
+        return bool(self._VISUAL_PATTERNS.search(goal))
+
+    def _observe(self, goal, use_vision=False):
+        """
+        Build comprehensive screen state using OS-level info as ground truth.
+        Screenshots + llava vision are used ONLY as a last resort.
+
+        Default behaviour (use_vision=False):
+          - Active window title (pygetwindow)
+          - Visible window inventory
+          - Running process names (tasklist)
+          - UIA elements from the focused window
+          - Browser URL / content if a browser is focused
+
+        Vision (screenshot + llava) is activated ONLY when:
+          - ``use_vision=True`` is passed explicitly by the caller
+          - The agent is stuck (self._stuck_count >= 2)
+          - The goal requires visual inspection (self._vision_needed(goal))
+        """
+        from vision import get_active_window_title
 
         # --- OS-level info (fast, reliable, no AI needed) ---
         window_title = get_active_window_title()
         visible_windows = self._get_window_inventory()
         running_apps = self._get_running_apps()
-        b64 = image_to_base64(image)
 
         # Build OS-level summary (always available, always accurate)
         os_summary = f"Active window: {window_title}"
         if visible_windows:
-            # Show top 5 visible windows (truncate titles)
             win_list = [w[:50] for w in visible_windows[:5]]
             os_summary += f"\nVisible windows: {', '.join(win_list)}"
+        if running_apps:
+            os_summary += f"\nRunning apps: {', '.join(running_apps[:10])}"
 
-        # Smart vision: skip llava on turns after non-visual actions (terminal,
-        # file ops, weather, etc.) since the screen didn't meaningfully change.
-        # This saves 2-5s per turn on non-visual sequences.
-        use_vision = True
-        _NON_VISUAL_TOOLS = {
-            "run_terminal", "manage_files", "manage_software", "get_weather",
-            "get_time", "get_news", "get_forecast", "set_reminder",
-            "list_reminders", "web_read", "web_search_answer", "create_file",
-            "run_command",
-        }
-        if self._history:
-            last = self._history[-1]
-            last_tool = last.get("tool", "")
-            if last_tool in _NON_VISUAL_TOOLS:
-                use_vision = False
-                logger.info(f"Skipping vision (last action was non-visual: {last_tool})")
+        # Get UI Automation elements (precise clickable targets with coordinates)
+        ui_elements = []
+        try:
+            from computer import get_ui_elements
+            ui_elements = get_ui_elements(max_depth=3, max_elements=20)
+        except Exception:
+            pass
 
-        if not use_vision:
-            description = os_summary
+        if ui_elements:
+            ui_summary_parts = []
+            for el in ui_elements[:10]:
+                tag = "CLICK" if el.get("clickable") else "INPUT" if el.get("editable") else "ELEM"
+                ui_summary_parts.append(f"[{tag}] \"{el['name']}\"")
+            os_summary += f"\nUI elements: {', '.join(ui_summary_parts)}"
+
+        # Extract browser page content when in a browser (for smart web interaction)
+        browser_content = None
+        browser_keywords = ["firefox", "chrome", "edge", "brave", "opera"]
+        if any(b in (window_title or "").lower() for b in browser_keywords):
+            browser_content = self._extract_browser_content()
+            if browser_content and browser_content.get("content"):
+                os_summary += f"\nPage URL: {browser_content.get('url', 'unknown')}"
+                os_summary += f"\nPage content preview: {browser_content['content'][:300]}"
+
+        # --- Decide whether to use vision (screenshot + llava) ---
+        need_vision = (
+            use_vision
+            or self._stuck_count >= 2
+            or self._vision_needed(goal)
+        )
+
+        image = None
+        b64 = None
+        description = os_summary
+
+        if need_vision:
+            logger.info("Using vision (screenshot + llava) — %s",
+                        "caller requested" if use_vision
+                        else "agent stuck" if self._stuck_count >= 2
+                        else "goal requires visual inspection")
+            try:
+                from vision import capture_screenshot, image_to_base64, _call_llava
+
+                image = capture_screenshot()
+                if image is not None:
+                    b64 = image_to_base64(image)
+
+                    prompt = (
+                        "Describe this Windows screenshot in 1-2 SHORT sentences:\n"
+                        "- What is the main app/window visible?\n"
+                        "- Is there a popup, dialog box, or modal OVERLAYING the main window?\n"
+                        "IMPORTANT: A terminal/command prompt/PowerShell window is NOT a blocker.\n"
+                        "Only report popups/dialogs that are clearly blocking something else."
+                    )
+                    vision_desc = _call_llava(prompt, b64, temperature=0.1, num_predict=150)
+                    if vision_desc:
+                        description = f"{os_summary}\nVision: {vision_desc}"
+            except Exception as e:
+                logger.warning(f"Vision fallback failed: {e}")
         else:
-            # --- Vision analysis (contextual understanding) ---
-            prompt = (
-                "Describe this Windows screenshot in 1-2 SHORT sentences:\n"
-                "- What is the main app/window visible?\n"
-                "- Is there a popup, dialog box, or modal OVERLAYING the main window?\n"
-                "IMPORTANT: A terminal/command prompt/PowerShell window is NOT a blocker.\n"
-                "Only report popups/dialogs that are clearly blocking something else."
-            )
-
-            vision_desc = _call_llava(prompt, b64, temperature=0.1, num_predict=150)
-            description = f"{os_summary}\nVision: {vision_desc}" if vision_desc else os_summary
+            logger.info("Skipping vision — using OS-level info only")
 
         if description is None:
             description = "Vision model did not respond."
@@ -2178,23 +2252,6 @@ class DesktopAgent:
                 if not is_false_positive:
                     blocked = True
                     break
-
-        # Extract browser page content when in a browser (for smart web interaction)
-        browser_content = None
-        browser_keywords = ["firefox", "chrome", "edge", "brave", "opera"]
-        if any(b in (window_title or "").lower() for b in browser_keywords):
-            browser_content = self._extract_browser_content()
-            if browser_content and browser_content.get("content"):
-                description += f"\nPage URL: {browser_content.get('url', 'unknown')}"
-                description += f"\nPage content preview: {browser_content['content'][:300]}"
-
-        # Get UI Automation elements (precise clickable targets with coordinates)
-        ui_elements = []
-        try:
-            from computer import get_ui_elements
-            ui_elements = get_ui_elements(max_depth=3, max_elements=20)
-        except Exception:
-            pass
 
         return {
             "summary": description.strip(),

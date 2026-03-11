@@ -1093,6 +1093,16 @@ def _get_ollama_url():
         return "http://localhost:11434"
 
 
+def _get_ollama_model():
+    """Get the configured Ollama model name, with fallback to default."""
+    try:
+        from config import load_config, DEFAULT_OLLAMA_MODEL
+        cfg = load_config()
+        return cfg.get("ollama_model", DEFAULT_OLLAMA_MODEL)
+    except Exception:
+        return "qwen2.5:7b"
+
+
 def _generate_file_content(prompt, max_tokens=2048, timeout=120):
     """Generate file content using Ollama with higher token limit than quick_chat."""
     try:
@@ -1102,7 +1112,7 @@ def _generate_file_content(prompt, max_tokens=2048, timeout=120):
         resp = _req.post(
             f"{ollama_url}/api/generate",
             json={
-                "model": "qwen2.5:7b",
+                "model": _get_ollama_model(),
                 "prompt": prompt,
                 "stream": False,
                 "options": {"num_predict": max_tokens, "temperature": 0.7},

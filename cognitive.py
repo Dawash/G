@@ -45,12 +45,12 @@ def _get_provider_config():
     if _cached_config is not None:
         return _cached_config
     try:
-        from config import load_config, DEFAULT_OLLAMA_URL
+        from config import load_config, DEFAULT_OLLAMA_URL, DEFAULT_OLLAMA_MODEL
         cfg = load_config()
         _cached_config = {
             "provider": cfg.get("provider", "ollama"),
             "api_key": cfg.get("api_key", ""),
-            "model": cfg.get("ollama_model", "qwen2.5:7b"),
+            "model": cfg.get("ollama_model", DEFAULT_OLLAMA_MODEL),
             "ollama_url": cfg.get("ollama_url", DEFAULT_OLLAMA_URL),
         }
     except Exception:

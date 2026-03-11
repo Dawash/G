@@ -27,7 +27,7 @@ for mod in ("urllib3", "requests", "faster_whisper", "torch", "PIL"):
 
 def load_brain():
     """Initialize Brain with config — same as orchestration/assistant_loop.py does."""
-    from config import load_config
+    from config import load_config, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL
     from reminders import ReminderManager
     from memory import MemoryStore, UserPreferences
     from ai_providers import create_provider
@@ -37,8 +37,8 @@ def load_brain():
     api_key = config.get("api_key", "")
     username = config.get("username", "dawa")
     ainame = config.get("ai_name", "G")
-    ollama_model = config.get("ollama_model", "qwen2.5:7b")
-    ollama_url = config.get("ollama_url", "http://localhost:11434")
+    ollama_model = config.get("ollama_model", DEFAULT_OLLAMA_MODEL)
+    ollama_url = config.get("ollama_url", DEFAULT_OLLAMA_URL)
 
     reminder_mgr = ReminderManager()
     memory = MemoryStore()

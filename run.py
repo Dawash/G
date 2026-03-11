@@ -534,8 +534,8 @@ def _finish_provider_validation():
         config["provider"] = "ollama"
         config["api_key"] = "ollama"
         if "ollama_model" not in config:
-            model = input("  Which Ollama model? (default: qwen2.5:7b): ").strip()
-            config["ollama_model"] = model or "qwen2.5:7b"
+            model = input(f"  Which Ollama model? (default: {OLLAMA_DEFAULT_MODEL}): ").strip()
+            config["ollama_model"] = model or OLLAMA_DEFAULT_MODEL
         with open(config_file, "w") as f:
             json.dump(config, f, indent=2)
         print("  [OK] Switched to Ollama!")

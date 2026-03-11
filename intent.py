@@ -260,12 +260,19 @@ def classify_with_ai(user_text, provider_name, api_key):
         logging.error("No AI intent config for provider %r", provider_name)
         return None
 
-    # Resolve Ollama URL dynamically from config
+    # Resolve Ollama URL and model dynamically from config
     url = cfg["url"]
-    if url is None and provider_name == "ollama":
-        url = f"{_get_ollama_base_url()}/v1/chat/completions"
+    model = cfg["model"]
+    if provider_name == "ollama":
+        if url is None:
+            url = f"{_get_ollama_base_url()}/v1/chat/completions"
+        try:
+            from config import load_config, DEFAULT_OLLAMA_MODEL
+            model = load_config().get("ollama_model", DEFAULT_OLLAMA_MODEL)
+        except Exception:
+            pass  # keep static default
 
-    payload = cfg["build_payload"](user_text, cfg["model"])
+    payload = cfg["build_payload"](user_text, model)
     headers = cfg["headers"](api_key)
 
     try:

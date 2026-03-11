@@ -108,7 +108,7 @@ def main():
     start_init = time.time()
 
     from brain import Brain
-    from config import load_config
+    from config import load_config, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL
     from ai_providers import create_provider
     from reminders import ReminderManager
     from memory import MemoryStore, UserPreferences
@@ -119,8 +119,8 @@ def main():
     api_key = cfg.get("api_key")
     uname = cfg.get("username", "User")
     ainame = cfg.get("ainame", "G")
-    ollama_model = cfg.get("ollama_model", "qwen2.5:7b")
-    ollama_url = cfg.get("ollama_url", "http://localhost:11434")
+    ollama_model = cfg.get("ollama_model", DEFAULT_OLLAMA_MODEL)
+    ollama_url = cfg.get("ollama_url", DEFAULT_OLLAMA_URL)
 
     provider = create_provider(provider_name, api_key, "", ollama_model=ollama_model)
     reminder_mgr = ReminderManager()

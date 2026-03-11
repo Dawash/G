@@ -131,7 +131,7 @@ class BrainThread(QThread):
     def _init_brain(self):
         """Full brain init mirroring assistant.py setup."""
         try:
-            from config import load_config
+            from config import load_config, DEFAULT_OLLAMA_MODEL
             from brain import Brain
             from reminders import ReminderManager
             import threading
@@ -141,7 +141,7 @@ class BrainThread(QThread):
             self._api_key = self._config.get("api_key", "")
             uname = self._config.get("username", "User")
             ainame = self._config.get("ai_name", "G")
-            ollama_model = self._config.get("ollama_model", "qwen2.5:7b")
+            ollama_model = self._config.get("ollama_model", DEFAULT_OLLAMA_MODEL)
 
             # Start reminder manager with speech callback
             self._reminder_mgr = ReminderManager(

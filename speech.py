@@ -1324,7 +1324,7 @@ def _detect_script_language(text):
     if non_space == 0:
         return None
     if devanagari / non_space > 0.2:
-        return "ne"  # Nepali (also covers Hindi — gTTS handles both)
+        return "hi"  # Hindi TTS for Devanagari (better pronunciation than Nepali gTTS)
     if arabic / non_space > 0.2:
         return "ar"
     return None

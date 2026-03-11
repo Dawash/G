@@ -81,15 +81,15 @@ def _summarize_news(headlines):
     # LLM summarization — use provider.chat() which takes a plain string
     try:
         from ai_providers import create_provider
-        from config import load_config, get_system_prompt
+        from config import load_config, get_system_prompt, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL
         cfg = load_config()
         if cfg:
             provider = create_provider(
                 cfg["provider"], cfg["api_key"],
                 "You are a friendly news anchor giving a quick morning briefing. "
                 "Be conversational and brief.",
-                ollama_model=cfg.get("ollama_model", "qwen2.5:7b"),
-                ollama_url=cfg.get("ollama_url", "http://localhost:11434"))
+                ollama_model=cfg.get("ollama_model", DEFAULT_OLLAMA_MODEL),
+                ollama_url=cfg.get("ollama_url", DEFAULT_OLLAMA_URL))
             prompt = (
                 "Summarize the following news into exactly 2-3 SHORT sentences (max 50 words total). "
                 "Focus on what happened. Be conversational and concise — this is for a quick voice briefing.\n\n"
@@ -236,18 +236,18 @@ def do_provider_switch(new_provider, config, brain_cls, action_map,
         ainame: AI name.
         system_prompt: System prompt string.
     """
-    from config import switch_provider, load_config
+    from config import switch_provider, load_config, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL
 
     if switch_provider(new_provider):
         cfg = load_config()
-        ollama_model = cfg.get("ollama_model", "qwen2.5:7b")
+        ollama_model = cfg.get("ollama_model", DEFAULT_OLLAMA_MODEL)
         new_brain = brain_cls(
             provider_name=cfg["provider"], api_key=cfg["api_key"],
             username=uname, ainame=ainame,
             action_registry=action_map, reminder_mgr=reminder_mgr,
             ollama_model=ollama_model,
             user_preferences=user_preferences,
-            ollama_url=cfg.get("ollama_url", "http://localhost:11434"),
+            ollama_url=cfg.get("ollama_url", DEFAULT_OLLAMA_URL),
         )
         resp = new_brain.quick_chat(
             f"You just switched AI providers to {new_provider}. "

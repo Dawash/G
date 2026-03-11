@@ -29,7 +29,7 @@ import threading
 import time
 import uuid
 
-from config import load_config, get_system_prompt
+from config import load_config, get_system_prompt, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL
 from ai_providers import create_provider
 from speech import (
     speak, speak_async, listen, get_detected_language, set_stt_engine,
@@ -254,8 +254,8 @@ def run(runtime_state=None):
     ainame = config["ai_name"]
     provider_name = config["provider"]
     api_key = config["api_key"]
-    ollama_model = config.get("ollama_model", "qwen2.5:7b")
-    ollama_url = config.get("ollama_url", "http://localhost:11434")
+    ollama_model = config.get("ollama_model", DEFAULT_OLLAMA_MODEL)
+    ollama_url = config.get("ollama_url", DEFAULT_OLLAMA_URL)
     cloud_model = config.get("cloud_model")
     system_prompt = get_system_prompt(uname, ainame)
     provider = create_provider(provider_name, api_key, system_prompt,
@@ -549,8 +549,8 @@ def run(runtime_state=None):
                 config = load_config()
                 provider_name = config["provider"]
                 api_key = config["api_key"]
-                ollama_model = config.get("ollama_model", "qwen2.5:7b")
-                ollama_url = config.get("ollama_url", "http://localhost:11434")
+                ollama_model = config.get("ollama_model", DEFAULT_OLLAMA_MODEL)
+                ollama_url = config.get("ollama_url", DEFAULT_OLLAMA_URL)
                 cloud_model = config.get("cloud_model")
                 provider = create_provider(provider_name, api_key, system_prompt,
                                            ollama_model=ollama_model, ollama_url=ollama_url,

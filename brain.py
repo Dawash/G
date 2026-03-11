@@ -1086,7 +1086,11 @@ class Brain:
             self.tools = self.tools_full
         self._svc = _BrainService(username, ainame, max_context=10)
         self._ctx = self._svc.ctx
-        self.ollama_model = ollama_model or "qwen2.5:7b"
+        try:
+            from config import DEFAULT_OLLAMA_MODEL
+        except ImportError:
+            DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
+        self.ollama_model = ollama_model or DEFAULT_OLLAMA_MODEL
 
         # Determine tool-calling mode
         self._use_native_tools = True  # Default: try native tools
@@ -1709,7 +1713,7 @@ class Brain:
         # Detect one-shot language override: "say X in Hindi", "greet in Nepali"
         # User is speaking ENGLISH but wants OUTPUT in another language
         _LANG_CODES = {
-            "nepali": "ne", "nepal": "ne", "hindi": "hi", "india": "hi",
+            "nepali": "hi", "nepal": "hi", "hindi": "hi", "india": "hi",
             "spanish": "es", "spain": "es", "french": "fr", "france": "fr",
             "german": "de", "germany": "de", "japanese": "ja", "japan": "ja",
             "korean": "ko", "korea": "ko", "chinese": "zh", "china": "zh",
