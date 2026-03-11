@@ -2134,61 +2134,96 @@ class DesktopAgent:
 
     def _observe(self, goal, use_vision=False):
         """
-        Build comprehensive screen state using OS-level info as ground truth.
-        Screenshots + llava vision are used ONLY as a last resort.
+        Build comprehensive screen state using ALL available methods combined.
 
-        Default behaviour (use_vision=False):
-          - Active window title (pygetwindow)
-          - Visible window inventory
-          - Running process names (tasklist)
-          - UIA elements from the focused window
-          - Browser URL / content if a browser is focused
+        Always uses (every turn):
+          1. OS-level: Active window title, visible windows, running processes
+          2. UIA: Accessibility tree elements (clickable buttons, input fields, coords)
+          3. CDP/Web: Browser URL, page content, links, buttons, forms (if browser running)
+          4. API: App-specific state (e.g. Spotify playing status)
 
-        Vision (screenshot + llava) is activated ONLY when:
-          - ``use_vision=True`` is passed explicitly by the caller
+        Vision (screenshot + llava) is added ONLY when:
+          - ``use_vision=True`` is passed explicitly
           - The agent is stuck (self._stuck_count >= 2)
           - The goal requires visual inspection (self._vision_needed(goal))
         """
         from vision import get_active_window_title
 
-        # --- OS-level info (fast, reliable, no AI needed) ---
+        # === LAYER 1: OS-level info (fast, always available) ===
         window_title = get_active_window_title()
         visible_windows = self._get_window_inventory()
         running_apps = self._get_running_apps()
 
-        # Build OS-level summary (always available, always accurate)
         os_summary = f"Active window: {window_title}"
         if visible_windows:
-            win_list = [w[:50] for w in visible_windows[:5]]
+            win_list = [w[:50] for w in visible_windows[:8]]
             os_summary += f"\nVisible windows: {', '.join(win_list)}"
         if running_apps:
-            os_summary += f"\nRunning apps: {', '.join(running_apps[:10])}"
+            os_summary += f"\nRunning apps: {', '.join(running_apps[:15])}"
 
-        # Get UI Automation elements (precise clickable targets with coordinates)
+        # === LAYER 2: UIA — accessibility tree (precise clickable targets) ===
         ui_elements = []
         try:
             from computer import get_ui_elements
-            ui_elements = get_ui_elements(max_depth=3, max_elements=20)
+            ui_elements = get_ui_elements(max_depth=3, max_elements=25)
         except Exception:
             pass
 
         if ui_elements:
             ui_summary_parts = []
-            for el in ui_elements[:10]:
+            for el in ui_elements[:15]:
                 tag = "CLICK" if el.get("clickable") else "INPUT" if el.get("editable") else "ELEM"
                 ui_summary_parts.append(f"[{tag}] \"{el['name']}\"")
             os_summary += f"\nUI elements: {', '.join(ui_summary_parts)}"
 
-        # Extract browser page content when in a browser (for smart web interaction)
+        # === LAYER 3: CDP/Web — browser content (always try, even if not focused) ===
         browser_content = None
-        browser_keywords = ["firefox", "chrome", "edge", "brave", "opera"]
-        if any(b in (window_title or "").lower() for b in browser_keywords):
-            browser_content = self._extract_browser_content()
-            if browser_content and browser_content.get("content"):
-                os_summary += f"\nPage URL: {browser_content.get('url', 'unknown')}"
-                os_summary += f"\nPage content preview: {browser_content['content'][:300]}"
+        # Try browser content if ANY browser is running (not just focused)
+        browser_names = ["chrome", "firefox", "msedge", "brave", "opera"]
+        browser_running = any(
+            app.lower().replace(".exe", "") in browser_names
+            for app in running_apps
+        )
+        browser_focused = any(
+            b in (window_title or "").lower()
+            for b in ["firefox", "chrome", "edge", "brave", "opera"]
+        )
 
-        # --- Decide whether to use vision (screenshot + llava) ---
+        if browser_running or browser_focused:
+            try:
+                browser_content = self._extract_browser_content()
+                if browser_content:
+                    if browser_content.get("url"):
+                        os_summary += f"\nBrowser URL: {browser_content.get('url', 'unknown')}"
+                    if browser_content.get("content"):
+                        os_summary += f"\nPage content: {browser_content['content'][:400]}"
+                    if browser_content.get("links"):
+                        link_names = [l["text"][:40] for l in browser_content["links"][:8]]
+                        os_summary += f"\nClickable links: {', '.join(link_names)}"
+            except Exception as e:
+                logger.debug(f"Browser content extraction failed: {e}")
+
+        # === LAYER 4: API / App-specific state ===
+        try:
+            # Spotify: detect current track from window title
+            for win in visible_windows:
+                if "spotify" in win.lower() and " - " in win:
+                    # Spotify window title is "Song - Artist - Spotify"
+                    os_summary += f"\nSpotify now playing: {win}"
+                    break
+            # YouTube: detect current video from browser title
+            if browser_content and browser_content.get("url", ""):
+                url = browser_content["url"]
+                if "youtube.com/watch" in url:
+                    # Title from browser is usually "Video Title - YouTube"
+                    for win in visible_windows:
+                        if "youtube" in win.lower():
+                            os_summary += f"\nYouTube playing: {win}"
+                            break
+        except Exception:
+            pass
+
+        # === LAYER 5 (last resort): Vision — screenshot + llava ===
         need_vision = (
             use_vision
             or self._stuck_count >= 2
@@ -2224,7 +2259,7 @@ class DesktopAgent:
             except Exception as e:
                 logger.warning(f"Vision fallback failed: {e}")
         else:
-            logger.info("Skipping vision — using OS-level info only")
+            logger.info("Observation: OS + UIA + Web + API (no vision needed)")
 
         if description is None:
             description = "Vision model did not respond."
