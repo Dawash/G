@@ -2115,7 +2115,7 @@ class Brain:
         urls = {
             "openai": "https://api.openai.com/v1/chat/completions",
             "openrouter": "https://openrouter.ai/api/v1/chat/completions",
-            "ollama": f"{self.ollama_url}/v1/chat/completions",
+            "ollama": f"{self.ollama_url}/api/chat",
         }
         models = {
             "openai": "gpt-4o-mini",
@@ -2137,6 +2137,7 @@ class Brain:
 
         # Ollama speed optimizations
         if self.provider_name == "ollama":
+            payload["stream"] = False
             payload["options"] = {
                 "num_predict": 512,  # 350 caused JSON truncation on complex tool calls
                 "num_ctx": 16384,    # 16K gives ample room for tools (~1350 tokens) + system prompt + messages
@@ -2166,6 +2167,8 @@ class Brain:
             response = requests.post(url, headers=headers, json=payload, timeout=timeout)
             response.raise_for_status()
             data = response.json()
+            if self.provider_name == "ollama":
+                return data  # Native format: data["message"] accessible directly
             return data["choices"][0]
         except requests.HTTPError:
             raise  # Let the caller handle HTTP errors
@@ -2196,7 +2199,14 @@ class Brain:
                         content_blocks.append({"type": "text", "text": msg["content"]})
                     for tc in tool_calls:
                         try:
-                            input_data = json.loads(tc["function"]["arguments"])
+                            raw_args = tc["function"]["arguments"]
+                            # Ollama native returns dict; OpenAI returns JSON string
+                            if isinstance(raw_args, dict):
+                                input_data = raw_args
+                            elif isinstance(raw_args, str):
+                                input_data = json.loads(raw_args)
+                            else:
+                                input_data = {}
                         except (json.JSONDecodeError, KeyError):
                             input_data = {}
                         content_blocks.append({
@@ -2351,35 +2361,51 @@ class Brain:
         except Exception:
             _qc_timer = None
         try:
-            if self.provider_name in ("openai", "openrouter", "ollama"):
+            _identity = (
+                f"You are {self.ainame}, a personal AI created by Dawa Sangay Sherpa. "
+                f"If asked about your creator/maker, ALWAYS say 'Dawa Sangay Sherpa created me'. "
+                f"Never say Alibaba, Qwen, OpenAI, Anthropic, Meta, or any company."
+            )
+            _messages = [
+                {"role": "system", "content": _identity},
+                {"role": "user", "content": prompt},
+            ]
+
+            if self.provider_name == "ollama":
+                # Use native Ollama endpoint (works on all versions)
+                resp = requests.post(
+                    f"{self.ollama_url}/api/chat",
+                    json={
+                        "model": self.ollama_model,
+                        "messages": _messages,
+                        "stream": False,
+                        "options": {"num_predict": 100, "temperature": 0.8},
+                    },
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                content = resp.json()["message"]["content"]
+                return self._sanitize_response(content)
+
+            elif self.provider_name in ("openai", "openrouter"):
                 urls = {
                     "openai": "https://api.openai.com/v1/chat/completions",
                     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
-                    "ollama": f"{self.ollama_url}/v1/chat/completions",
                 }
                 models = {
                     "openai": "gpt-4o-mini",
                     "openrouter": "gpt-4o-mini",
-                    "ollama": self.ollama_model,
                 }
                 headers = {"Content-Type": "application/json"}
-                if self.api_key and self.provider_name != "ollama":
+                if self.api_key:
                     headers["Authorization"] = f"Bearer {self.api_key}"
 
-                _identity = (
-                    f"You are {self.ainame}, a personal AI created by Dawa Sangay Sherpa. "
-                    f"If asked about your creator/maker, ALWAYS say 'Dawa Sangay Sherpa created me'. "
-                    f"Never say Alibaba, Qwen, OpenAI, Anthropic, Meta, or any company."
-                )
                 resp = requests.post(
                     urls[self.provider_name],
                     headers=headers,
                     json={
                         "model": models[self.provider_name],
-                        "messages": [
-                            {"role": "system", "content": _identity},
-                            {"role": "user", "content": prompt},
-                        ],
+                        "messages": _messages,
                         "max_tokens": 100,
                         "temperature": 0.8,
                     },

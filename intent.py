@@ -163,13 +163,31 @@ def _get_ollama_base_url():
         return "http://localhost:11434"
 
 
+def _build_ollama_payload(user_text, model):
+    """Build request body for native Ollama /api/chat endpoint."""
+    return {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": INTENT_SYSTEM_PROMPT},
+            {"role": "user", "content": user_text},
+        ],
+        "stream": False,
+        "options": {"temperature": 0, "num_predict": 300},
+    }
+
+
+def _extract_content_ollama(data):
+    """Pull the assistant message text from a native Ollama response."""
+    return data["message"]["content"]
+
+
 # Provider-specific configuration looked up by name.
 _PROVIDER_CONFIG = {
     "ollama": {
         "url": None,  # Resolved dynamically from config via _get_ollama_base_url()
         "model": "qwen2.5:7b",
-        "build_payload": _build_openai_payload,
-        "extract": _extract_content_openai,
+        "build_payload": _build_ollama_payload,
+        "extract": _extract_content_ollama,
         "headers": lambda key: {
             "Content-Type": "application/json",
         },
@@ -265,7 +283,7 @@ def classify_with_ai(user_text, provider_name, api_key):
     model = cfg["model"]
     if provider_name == "ollama":
         if url is None:
-            url = f"{_get_ollama_base_url()}/v1/chat/completions"
+            url = f"{_get_ollama_base_url()}/api/chat"
         try:
             from config import load_config, DEFAULT_OLLAMA_MODEL
             model = load_config().get("ollama_model", DEFAULT_OLLAMA_MODEL)

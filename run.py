@@ -61,6 +61,7 @@ OPTIONAL_PACKAGES = {
     "win32com.client": "pywin32",     # Start Menu shortcut resolution
     "pyautogui": "pyautogui",         # Desktop automation (keyboard/mouse)
     "PIL": "Pillow",                  # Screenshot processing for vision
+    "comtypes": "comtypes",           # UIA accessibility tree (pywinauto dep)
 }
 
 CORE_MODULES = [
@@ -579,6 +580,15 @@ def check_modules():
         print("Fix the errors above and try again.")
         sys.exit(1)
 
+    # Optional modules (not required, but nice to have)
+    for opt_module in ["alarms", "cognitive", "skills", "agent_router"]:
+        py_file = os.path.join(PROJECT_DIR, f"{opt_module}.py")
+        pkg_dir = os.path.join(PROJECT_DIR, opt_module, "__init__.py")
+        if os.path.isfile(py_file) or os.path.isfile(pkg_dir):
+            print(f"  [OK] {opt_module} (optional)")
+        else:
+            print(f"  [INFO] {opt_module} not found (optional, not required)")
+
     print("[OK] All modules ready\n")
 
 
@@ -663,6 +673,97 @@ def _relaunch_with_preferred_python():
         return False  # Fall through to current Python
 
 
+def _ensure_first_run_setup():
+    """
+    On first run, trigger interactive config setup BEFORE downloading models.
+    This ensures the user's chosen model gets downloaded, not the default.
+    Returns True if first-run setup was just completed.
+    """
+    config_file = os.path.join(PROJECT_DIR, "config.json")
+    if os.path.exists(config_file):
+        return False  # Already configured
+
+    print("\n  First-time setup detected! Let's configure your assistant.\n")
+
+    # Import config module and trigger interactive setup
+    if PROJECT_DIR not in sys.path:
+        sys.path.insert(0, PROJECT_DIR)
+    os.chdir(PROJECT_DIR)
+    try:
+        from config import load_config
+        load_config()  # This triggers _setup_new() if no config.json
+        return True
+    except Exception as e:
+        print(f"  [WARN] Setup error: {e}")
+        print("  You can re-run setup by deleting config.json and restarting.")
+        return False
+
+
+def _download_speech_models():
+    """Pre-download speech models (Whisper STT + Piper TTS) so first use is instant."""
+    print("[SPEECH] Downloading speech models...")
+
+    # --- Whisper STT model ---
+    whisper_dir = os.path.join(PROJECT_DIR, "models", "whisper-base")
+    if os.path.isdir(whisper_dir) and os.listdir(whisper_dir):
+        print("  [OK] Whisper STT model ready")
+    else:
+        print("  Downloading Whisper STT model (first-time, ~150MB)...")
+        try:
+            from faster_whisper import WhisperModel
+            # Download to default cache, speech.py will copy to local dir on first use
+            _model = WhisperModel("base", device="cpu", compute_type="int8")
+            del _model  # Free memory immediately
+            print("  [OK] Whisper STT model downloaded")
+        except ImportError:
+            print("  [SKIP] faster-whisper not installed — STT will use fallback")
+        except Exception as e:
+            print(f"  [WARN] Could not pre-download Whisper model: {e}")
+            print("         Speech-to-text will download on first use.")
+
+    # --- Piper TTS model ---
+    piper_dir = os.path.join(PROJECT_DIR, "models", "piper")
+    piper_onnx = os.path.join(piper_dir, "en_US-lessac-medium.onnx")
+    if os.path.isfile(piper_onnx):
+        print("  [OK] Piper TTS model ready")
+    else:
+        print("  Downloading Piper TTS voice (~60MB)...")
+        try:
+            os.makedirs(piper_dir, exist_ok=True)
+            base_url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium"
+            model_name = "en_US-lessac-medium"
+            onnx_path = os.path.join(piper_dir, f"{model_name}.onnx")
+            json_path = os.path.join(piper_dir, f"{model_name}.onnx.json")
+
+            def _progress(block, block_size, total):
+                if total > 0:
+                    pct = min(100, block * block_size * 100 // total)
+                    print(f"\r    Progress: {pct}%", end="", flush=True)
+
+            if not os.path.isfile(onnx_path):
+                urllib.request.urlretrieve(
+                    f"{base_url}/{model_name}.onnx?download=true", onnx_path, _progress
+                )
+                print()  # newline after progress
+            if not os.path.isfile(json_path):
+                urllib.request.urlretrieve(
+                    f"{base_url}/{model_name}.onnx.json", json_path
+                )
+            print("  [OK] Piper TTS voice downloaded")
+        except Exception as e:
+            print(f"\n  [WARN] Could not download Piper voice: {e}")
+            print("         Text-to-speech will use fallback (pyttsx3).")
+            # Clean up partial downloads
+            for p in (onnx_path, json_path):
+                try:
+                    if os.path.isfile(p) and os.path.getsize(p) < 1000:
+                        os.unlink(p)  # Remove corrupted partial download
+                except OSError:
+                    pass
+
+    print("[OK] Speech models ready\n")
+
+
 def main():
     # Auto-relaunch with Python 3.12 if available (needed for PyAudio, faster-whisper)
     _relaunch_with_preferred_python()
@@ -671,21 +772,31 @@ def main():
 
     start_time = time.time()
 
-    print("  [1/6] Checking Python version...")
+    print("  [1/8] Checking Python version...")
     check_python()
 
-    print("  [2/6] Checking dependencies...")
+    print("  [2/8] Checking dependencies...")
     check_dependencies()
 
-    print("  [3/6] Setting up local AI brain...")
+    # First-run: interactive config BEFORE model downloads
+    # This ensures the user's chosen model gets downloaded, not the default
+    print("  [3/8] Checking configuration...")
+    is_first_run = _ensure_first_run_setup()
+    if not is_first_run:
+        print("  [OK] Configuration loaded\n")
+
+    print("  [4/8] Setting up local AI brain...")
     setup_ollama()
     _check_vision_model()
 
-    print("  [4/6] Validating AI provider...")
+    print("  [5/8] Downloading speech models...")
+    _download_speech_models()
+
+    print("  [6/8] Validating AI provider...")
     validate_provider()
     # Cloud provider validation runs in background — continues to next steps
 
-    print("  [5/6] Checking project modules...")
+    print("  [7/8] Checking project modules...")
     check_modules()
 
     # Collect background validation result before launch (may prompt user)
@@ -694,7 +805,7 @@ def main():
     elapsed = time.time() - start_time
     print(f"  Startup checks completed in {elapsed:.1f}s\n")
 
-    print("  [6/6] Launching assistant...")
+    print("  [8/8] Launching assistant...")
     launch()
 
 

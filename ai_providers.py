@@ -138,20 +138,38 @@ class OllamaProvider(ChatProvider):
         self.ollama_url = (ollama_url or self.DEFAULT_BASE_URL).rstrip("/")
 
     def _call_api(self):
-        response = requests.post(
-            f"{self.ollama_url}/v1/chat/completions",
-            json={
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": self.system_prompt},
-                    *self.messages,
-                ],
-            },
-            timeout=60,  # First call can be slow (model loading), complex tasks need more time
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
+        # Try native Ollama endpoint first (works on all versions)
+        # Falls back to OpenAI-compatible /v1/ if native fails
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            *self.messages,
+        ]
+        try:
+            response = requests.post(
+                f"{self.ollama_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "stream": False,
+                },
+                timeout=60,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["message"]["content"]
+        except requests.exceptions.HTTPError:
+            # Fallback to OpenAI-compatible endpoint (newer Ollama)
+            response = requests.post(
+                f"{self.ollama_url}/v1/chat/completions",
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                },
+                timeout=60,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"]
 
     @staticmethod
     def is_available(ollama_url=None):

@@ -876,17 +876,17 @@ class DesktopAgent:
         for attempt in range(2):  # Retry once on timeout
             try:
                 resp = requests.post(
-                    f"{OLLAMA_API}/v1/chat/completions",
+                    f"{OLLAMA_API}/api/chat",
                     json={
                         "model": self.ollama_model,
                         "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0.4,
-                        "options": {"num_predict": 300},
+                        "stream": False,
+                        "options": {"temperature": 0.4, "num_predict": 300},
                     },
                     timeout=30,
                 )
                 resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"]
+                content = resp.json()["message"]["content"]
                 lines = re.findall(r'^\s*\d+[\.\)]\s*(.+)', content, re.MULTILINE)
                 if lines:
                     new_steps = [line.strip().strip('"\'') for line in lines[:8] if line.strip()]
@@ -1472,17 +1472,17 @@ class DesktopAgent:
         )
         try:
             resp = requests.post(
-                f"{OLLAMA_API}/v1/chat/completions",
+                f"{OLLAMA_API}/api/chat",
                 json={
                     "model": self.ollama_model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.2,
-                    "options": {"num_predict": 300},
+                    "stream": False,
+                    "options": {"temperature": 0.2, "num_predict": 300},
                 },
                 timeout=20,
             )
             resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
+            content = resp.json()["message"]["content"]
             # Extract numbered list lines (most reliable format from LLM)
             lines = re.findall(r'^\s*\d+[\.\)]\s*(.+)', content, re.MULTILINE)
             if lines:
@@ -1716,17 +1716,17 @@ class DesktopAgent:
         )
         try:
             resp = requests.post(
-                f"{OLLAMA_API}/v1/chat/completions",
+                f"{OLLAMA_API}/api/chat",
                 json={
                     "model": self.ollama_model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                    "options": {"num_predict": 300},
+                    "stream": False,
+                    "options": {"temperature": 0.3, "num_predict": 300},
                 },
                 timeout=20,
             )
             resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
+            content = resp.json()["message"]["content"]
             # Extract JSON — try balanced brace matching for first object
             brace_depth = 0
             start = content.find('{')
@@ -2166,8 +2166,10 @@ class DesktopAgent:
         try:
             from computer import get_ui_elements
             ui_elements = get_ui_elements(max_depth=3, max_elements=25)
-        except Exception:
-            pass
+        except ImportError as e:
+            logger.info(f"UIA layer unavailable (missing package): {e}")
+        except Exception as e:
+            logger.info(f"UIA layer failed: {e}")
 
         if ui_elements:
             ui_summary_parts = []
@@ -2201,7 +2203,7 @@ class DesktopAgent:
                         link_names = [l["text"][:40] for l in browser_content["links"][:8]]
                         os_summary += f"\nClickable links: {', '.join(link_names)}"
             except Exception as e:
-                logger.debug(f"Browser content extraction failed: {e}")
+                logger.info(f"Browser content layer failed: {e}")
 
         # === LAYER 4: API / App-specific state ===
         try:
@@ -2477,17 +2479,17 @@ class DesktopAgent:
 
         try:
             resp = requests.post(
-                f"{OLLAMA_API}/v1/chat/completions",
+                f"{OLLAMA_API}/api/chat",
                 json={
                     "model": self.ollama_model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                    "options": {"num_predict": 400},
+                    "stream": False,
+                    "options": {"temperature": 0.3, "num_predict": 400},
                 },
                 timeout=30,
             )
             resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
+            content = resp.json()["message"]["content"]
 
             # Parse JSON from response
             json_match = re.search(r'\{[\s\S]*\}', content)
@@ -3069,17 +3071,17 @@ class DesktopAgent:
 
         try:
             resp = requests.post(
-                f"{OLLAMA_API}/v1/chat/completions",
+                f"{OLLAMA_API}/api/chat",
                 json={
                     "model": self.ollama_model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.1,
-                    "options": {"num_predict": 200},
+                    "stream": False,
+                    "options": {"temperature": 0.1, "num_predict": 200},
                 },
                 timeout=15,
             )
             resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"].strip()
+            content = resp.json()["message"]["content"].strip()
 
             if content.upper().startswith("SINGLE"):
                 return None

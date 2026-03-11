@@ -70,17 +70,17 @@ def _llm_call(prompt, max_tokens=200, temperature=0.3):
 
         if provider == "ollama":
             resp = requests.post(
-                f"{ollama_url}/v1/chat/completions",
+                f"{ollama_url}/api/chat",
                 json={
                     "model": cfg["model"],
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
+                    "stream": False,
+                    "options": {"num_predict": max_tokens, "temperature": temperature},
                 },
                 timeout=15,
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
+            return resp.json()["message"]["content"].strip()
 
         elif provider == "openai":
             resp = requests.post(
@@ -133,17 +133,17 @@ def _llm_call(prompt, max_tokens=200, temperature=0.3):
         else:
             # Unknown provider, try Ollama as fallback
             resp = requests.post(
-                f"{ollama_url}/v1/chat/completions",
+                f"{ollama_url}/api/chat",
                 json={
                     "model": cfg["model"],
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
+                    "stream": False,
+                    "options": {"num_predict": max_tokens, "temperature": temperature},
                 },
                 timeout=15,
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
+            return resp.json()["message"]["content"].strip()
 
     except Exception as e:
         logger.debug(f"Cognitive LLM call failed: {e}")

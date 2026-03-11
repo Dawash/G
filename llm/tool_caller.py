@@ -348,7 +348,14 @@ def _execute_single_tool(brain, tc, _seen_tools, round_num):
 
     fn_name = tc["function"]["name"]
     try:
-        fn_args = json.loads(tc["function"]["arguments"])
+        raw_args = tc["function"]["arguments"]
+        # Ollama native API returns arguments as dict; OpenAI returns JSON string
+        if isinstance(raw_args, dict):
+            fn_args = raw_args
+        elif isinstance(raw_args, str):
+            fn_args = json.loads(raw_args)
+        else:
+            fn_args = {}
     except (json.JSONDecodeError, KeyError, TypeError):
         fn_args = {}
 
@@ -404,7 +411,14 @@ def _execute_parallel_tools(brain, tool_calls, round_num):
     def _exec_tool(tc):
         fn_name = tc["function"]["name"]
         try:
-            fn_args = json.loads(tc["function"]["arguments"])
+            raw_args = tc["function"]["arguments"]
+            # Ollama native API returns arguments as dict; OpenAI returns JSON string
+            if isinstance(raw_args, dict):
+                fn_args = raw_args
+            elif isinstance(raw_args, str):
+                fn_args = json.loads(raw_args)
+            else:
+                fn_args = {}
         except (json.JSONDecodeError, KeyError, TypeError):
             fn_args = {}
         resolved = _resolve_tool_name(fn_name)

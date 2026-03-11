@@ -166,7 +166,7 @@ def listen_for_wake_word(timeout_s=None):
                         return True
                     for wake in _wake_words:
                         ratio = SequenceMatcher(None, fb_lower, wake).ratio()
-                        if ratio >= 0.6:
+                        if ratio >= _WAKE_WORD_FUZZY_THRESHOLD:
                             logging.info(f"Wake word fuzzy match (energy fallback): '{fb_lower}' ~ '{wake}' ({ratio:.2f})")
                             set_mic_state("IDLE")
                             return True
@@ -392,10 +392,30 @@ _vad_failed = False
 
 _VAD_SAMPLE_RATE = 16000
 _VAD_CHUNK_SAMPLES = 512  # 512 samples = 32ms at 16kHz
-_VAD_SPEECH_THRESHOLD = 0.4  # Confidence threshold for speech detection
-_VAD_SILENCE_TIMEOUT_MS = 900  # Silence after speech to end capture (600 was cutting off natural pauses)
 _VAD_MAX_SPEECH_S = 10  # Max speech duration in seconds
 _VAD_PRE_SPEECH_CHUNKS = 8  # ~256ms of audio before speech start (avoids clipping)
+
+# Configurable sensitivity — overridden from config.json if present
+_VAD_SPEECH_THRESHOLD = 0.4  # Confidence threshold for speech detection
+_VAD_SILENCE_TIMEOUT_MS = 900  # Silence after speech to end capture
+_WAKE_WORD_FUZZY_THRESHOLD = 0.6  # SequenceMatcher ratio for fuzzy wake word matching
+
+def _load_speech_config():
+    """Load tunable VAD/wake-word settings from config.json (if available)."""
+    global _VAD_SPEECH_THRESHOLD, _VAD_SILENCE_TIMEOUT_MS, _WAKE_WORD_FUZZY_THRESHOLD
+    try:
+        import json as _json
+        _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+        if os.path.exists(_cfg_path):
+            with open(_cfg_path, "r", encoding="utf-8") as _f:
+                _cfg = _json.load(_f)
+            _VAD_SPEECH_THRESHOLD = float(_cfg.get("vad_threshold", _VAD_SPEECH_THRESHOLD))
+            _VAD_SILENCE_TIMEOUT_MS = int(_cfg.get("vad_silence_ms", _VAD_SILENCE_TIMEOUT_MS))
+            _WAKE_WORD_FUZZY_THRESHOLD = float(_cfg.get("wake_word_threshold", _WAKE_WORD_FUZZY_THRESHOLD))
+    except Exception:
+        pass  # Use defaults
+
+_load_speech_config()
 
 
 def _get_vad_model():

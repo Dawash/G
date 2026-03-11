@@ -444,7 +444,7 @@ def _setup_new():
         if email_address:
             print("  You can configure the password later by saying 'set up email'.")
 
-    # --- Step 5: Morning routine ---
+    # --- Step 5: Morning routine (final step) ---
     print(f"\n  STEP 5: Morning Routine\n")
     print("  I can wake you up every morning with an alarm sound,")
     print("  a motivational message, weather forecast, and news summary!")
@@ -462,17 +462,6 @@ def _setup_new():
         print(f"\n  Morning alarm set for {morning_time} ({morning_recurrence})!")
         print("  I'll play an alarm sound, then give you motivation + weather + news.")
 
-    # --- Step 6: Web Remote Access ---
-    print(f"\n  STEP 6: Web Remote Access (optional)\n")
-    print("  Control the assistant from your phone or any browser.")
-    print("  Opens a web dashboard you can access over your local network.\n")
-    web_remote_choice = input("  Enable web remote access? (y/N): ").strip().lower()
-    web_remote = web_remote_choice == "y"
-    gateway_token = ""
-    if web_remote:
-        gateway_token = secrets.token_urlsafe(16)
-        print(f"  Web remote enabled! Token: {gateway_token}")
-
     # --- Build config ---
     config = {
         "username": uname,
@@ -482,9 +471,6 @@ def _setup_new():
         "language": language,
         "stt_engine": "whisper",
         "first_run_done": True,
-        "web_remote": web_remote,
-        "gateway_port": 8765,
-        "gateway_token": gateway_token,
     }
     if ollama_model:
         config["ollama_model"] = ollama_model
