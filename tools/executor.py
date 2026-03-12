@@ -43,6 +43,25 @@ _HANDLER_TIMEOUTS = {
     "ask_yes_no": 60,
 }
 
+
+def _get_scaled_timeout(tool_name):
+    """Get timeout for a tool, scaled by model size for Ollama."""
+    base = _HANDLER_TIMEOUTS.get(tool_name, 30)
+    try:
+        from config import load_config
+        cfg = load_config()
+        if cfg.get("provider") == "ollama":
+            model = (cfg.get("ollama_model") or "").lower()
+            if any(s in model for s in ("72b", "70b")):
+                return int(base * 4)
+            elif any(s in model for s in ("32b", "27b")):
+                return int(base * 2.5)
+            elif any(s in model for s in ("14b", "13b")):
+                return int(base * 1.5)
+    except Exception:
+        pass
+    return base
+
 # Tools that must run on the calling thread (e.g. pyautogui desktop automation).
 # These are called directly without a timeout wrapper.
 _MAIN_THREAD_TOOLS = frozenset({
@@ -349,7 +368,7 @@ class ToolExecutor:
             return spec.handler(**kwargs)
 
         # All other tools get a per-handler timeout to prevent deadlocks
-        timeout = _HANDLER_TIMEOUTS.get(spec.name, 30)
+        timeout = _get_scaled_timeout(spec.name)
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(spec.handler, **kwargs)
             try:

@@ -201,7 +201,8 @@ def focus_window(name):
         try:
             win.set_focus()
         except Exception:
-            # Fallback: use pygetwindow
+            # Fallback 1: use pygetwindow
+            activated = False
             try:
                 import pygetwindow as gw
                 gw_wins = gw.getWindowsWithTitle(title)
@@ -209,8 +210,26 @@ def focus_window(name):
                     if gw_wins[0].isMinimized:
                         gw_wins[0].restore()
                     gw_wins[0].activate()
+                    activated = True
             except Exception:
                 pass
+
+            # Fallback 2: Win32 API SetForegroundWindow (most reliable)
+            if not activated:
+                try:
+                    import ctypes
+                    import pygetwindow as gw
+                    user32 = ctypes.windll.user32
+                    gw_wins = gw.getWindowsWithTitle(title)
+                    if gw_wins:
+                        hwnd = gw_wins[0]._hWnd
+                        if user32.IsIconic(hwnd):
+                            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                        user32.keybd_event(0x12, 0, 0, 0)  # Alt down
+                        user32.keybd_event(0x12, 0, 2, 0)  # Alt up
+                        user32.SetForegroundWindow(hwnd)
+                except Exception:
+                    pass
 
         return f"Focused window: {title}"
     except Exception as e:

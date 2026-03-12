@@ -100,6 +100,192 @@ _RECOVERY_HINTS = {
 }
 _LEARNED_HINTS_FILE = os.path.join(os.path.dirname(__file__), "learned_hints.json")
 
+
+def _detect_and_dismiss_popup(goal_lower=""):
+    """Detect and dismiss ANY blocking popup, dialog, or system prompt.
+
+    Returns the name of the dismissed popup, or None if nothing was found.
+
+    Strategy:
+    1. Check active window title against known popup patterns
+    2. Check window class name for dialog indicators (#32770 = Windows dialog)
+    3. Use UIA to check for button controls (OK/Cancel/Close/Accept/Dismiss)
+    4. Use targeted dismissal strategy based on popup type
+    """
+    try:
+        import pygetwindow as gw
+        import pyautogui
+    except ImportError:
+        return None
+
+    try:
+        active = gw.getActiveWindow()
+        if not active or not active.title:
+            return None
+    except Exception:
+        return None
+
+    title_lower = active.title.lower()
+
+    # Skip normal app windows that are clearly not popups
+    _normal_apps = [
+        "chrome", "firefox", "edge", "brave", "spotify", "discord",
+        "steam", "notepad", "explorer", "terminal", "powershell",
+        "cmd", "code", "visual studio", "word", "excel", "outlook",
+    ]
+    # If the active window is the target app itself, not a popup
+    if goal_lower:
+        for app in _normal_apps:
+            if app in goal_lower and app in title_lower:
+                return None
+
+    # ---- KNOWN POPUP PATTERNS (fast title-based detection) ----
+    _popup_patterns = {
+        # App picker / file association
+        "app_picker": [
+            "select an app", "open with", "how do you want to open",
+            "choose an app", "look for an app", "select a default",
+            "windows cannot find",
+        ],
+        # Cookie / consent banners (web)
+        "cookie": [
+            "cookie", "accept all", "consent", "gdpr",
+        ],
+        # Browser profile / setup
+        "profile": [
+            "choose profile", "select profile", "profile picker",
+            "welcome to", "get started", "set up",
+        ],
+        # Default app / browser prompts
+        "default": [
+            "default browser", "set as default", "not your default",
+            "make default", "default app",
+        ],
+        # Permission / notification prompts
+        "permission": [
+            "allow", "notification", "permission", "wants to",
+            "show notifications", "send notifications",
+        ],
+        # Update / restart prompts
+        "update": [
+            "update available", "restart to update", "new version",
+            "update now", "restart required",
+        ],
+        # Save / discard dialogs
+        "save": [
+            "save changes", "do you want to save", "unsaved changes",
+            "save before", "don't save",
+        ],
+        # Generic Windows dialogs
+        "dialog": [
+            "error", "warning", "confirm", "are you sure",
+        ],
+    }
+
+    popup_type = None
+    for ptype, keywords in _popup_patterns.items():
+        if any(kw in title_lower for kw in keywords):
+            popup_type = ptype
+            break
+
+    # ---- WIN32 CLASS CHECK: #32770 = standard Windows dialog box ----
+    if not popup_type:
+        try:
+            import ctypes
+            hwnd = active._hWnd
+            class_buf = ctypes.create_unicode_buffer(256)
+            ctypes.windll.user32.GetClassNameW(hwnd, class_buf, 256)
+            class_name = class_buf.value
+            if class_name == "#32770":
+                popup_type = "system_dialog"
+                logger.info(f"Detected system dialog (class #32770): '{active.title}'")
+        except Exception:
+            pass
+
+    # ---- SMALL WINDOW CHECK: popups are typically small ----
+    if not popup_type:
+        try:
+            w, h = active.width, active.height
+            # Small windows (< 800x600) that aren't the target app are likely popups
+            if w < 800 and h < 600 and w > 50 and h > 50:
+                # Check if it has typical dialog buttons via UIA
+                try:
+                    from automation.ui_control import list_controls
+                    controls = list_controls(window=active.title, max_depth=3, max_count=30)
+                    if controls:
+                        button_names = [
+                            (c.get("name") or "").lower() for c in controls
+                            if (c.get("control_type") or "").lower() == "button"
+                        ]
+                        dialog_buttons = {"ok", "cancel", "close", "yes", "no", "accept",
+                                          "deny", "dismiss", "allow", "block", "don't save",
+                                          "not now", "skip", "later", "remind me later"}
+                        if any(bn in dialog_buttons for bn in button_names):
+                            popup_type = "uia_dialog"
+                            logger.info(f"UIA detected dialog with buttons: {button_names}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    if not popup_type:
+        return None
+
+    # ---- DISMISSAL STRATEGIES ----
+    logger.info(f"Dismissing popup ({popup_type}): '{active.title}'")
+    try:
+        if popup_type == "app_picker":
+            # "Select an app" — press Escape to cancel
+            pyautogui.press("escape")
+            time.sleep(0.5)
+        elif popup_type == "cookie":
+            # Cookie banners: Tab to Accept/OK button, then Enter
+            pyautogui.press("tab")
+            time.sleep(0.2)
+            pyautogui.press("enter")
+            time.sleep(0.5)
+        elif popup_type == "default":
+            # "Set as default browser" — dismiss
+            pyautogui.hotkey("alt", "F4")
+            time.sleep(0.5)
+        elif popup_type in ("permission", "update"):
+            # Permission/update prompts — Escape to dismiss
+            pyautogui.press("escape")
+            time.sleep(0.5)
+        elif popup_type == "save":
+            # Save dialog — try Alt+N for "Don't Save" or Escape
+            pyautogui.hotkey("alt", "n")
+            time.sleep(0.3)
+            still = gw.getActiveWindow()
+            if still and still.title == active.title:
+                pyautogui.press("escape")
+                time.sleep(0.3)
+        elif popup_type == "profile":
+            # Profile picker — Escape first, then Enter if still there
+            pyautogui.press("escape")
+            time.sleep(0.3)
+            still = gw.getActiveWindow()
+            if still and still.title == active.title:
+                pyautogui.press("enter")
+                time.sleep(0.5)
+        elif popup_type in ("system_dialog", "uia_dialog", "dialog"):
+            # Generic dialog — try Escape first (cancel/close)
+            pyautogui.press("escape")
+            time.sleep(0.3)
+            still = gw.getActiveWindow()
+            if still and still.title == active.title:
+                # Still there — try Enter (OK/default button)
+                pyautogui.press("enter")
+                time.sleep(0.5)
+        else:
+            pyautogui.press("escape")
+            time.sleep(0.5)
+    except Exception:
+        pass
+
+    return f"{popup_type}: {active.title}"
+
+
 # Tools the agent can use — includes brain tools for direct execution
 AVAILABLE_TOOLS = [
     "open_app", "close_app", "click_at", "type_text",
@@ -431,63 +617,12 @@ class DesktopAgent:
                             "message": f"Stopped — {takeover['type']} screen detected and user didn't continue."}
                 continue  # Re-observe after user handled it
 
-            # Check for simple blockers (popups, dialogs) with smart dismissal
-            try:
-                import pygetwindow as gw
-                active = gw.getActiveWindow()
-                if active and active.title:
-                    title_lower = active.title.lower()
-                    # Categorize blocker type for targeted dismissal
-                    blocker_type = None
-                    if any(kw in title_lower for kw in ["cookie", "accept", "consent"]):
-                        blocker_type = "cookie"
-                    elif any(kw in title_lower for kw in ["profile", "choose profile", "select profile"]):
-                        blocker_type = "profile"
-                    elif any(kw in title_lower for kw in ["default browser", "set as default"]):
-                        blocker_type = "default"
-                    elif any(kw in title_lower for kw in ["allow", "permission", "notification"]):
-                        blocker_type = "permission"
-                    elif any(kw in title_lower for kw in ["select", "choose"]):
-                        blocker_type = "chooser"
-
-                    if blocker_type:
-                        obstacles.append(f"Blocker ({blocker_type}): {active.title}")
-                        try:
-                            import pyautogui
-                            if blocker_type == "cookie":
-                                # Cookie banners: try Tab+Enter to hit Accept/OK button
-                                pyautogui.press("tab")
-                                time.sleep(0.2)
-                                pyautogui.press("enter")
-                                time.sleep(0.5)
-                                logger.info(f"RECON: dismissed cookie banner with Tab+Enter")
-                            elif blocker_type == "default":
-                                # Default browser: usually has "Not now" or close
-                                pyautogui.hotkey("alt", "F4")
-                                time.sleep(0.5)
-                                logger.info(f"RECON: dismissed default browser dialog with Alt+F4")
-                            elif blocker_type == "permission":
-                                # Notification permission: dismiss with Escape
-                                pyautogui.press("escape")
-                                time.sleep(0.5)
-                                logger.info(f"RECON: dismissed permission dialog with Escape")
-                            else:
-                                # Profile picker / chooser: try Escape first, then Enter
-                                pyautogui.press("escape")
-                                time.sleep(0.3)
-                                # Check if still there
-                                still_active = gw.getActiveWindow()
-                                if still_active and still_active.title == active.title:
-                                    pyautogui.press("enter")  # Select default option
-                                    time.sleep(0.5)
-                                    logger.info(f"RECON: dismissed chooser with Enter (default)")
-                                else:
-                                    logger.info(f"RECON: dismissed blocker with Escape")
-                        except Exception:
-                            pass
-                        continue  # Re-observe
-            except Exception:
-                pass
+            # Check for blocking popups/dialogs and auto-dismiss them
+            blocker_dismissed = _detect_and_dismiss_popup(goal_lower=goal.lower() if goal else "")
+            if blocker_dismissed:
+                obstacles.append(f"Blocker dismissed: {blocker_dismissed}")
+                time.sleep(0.5)
+                continue  # Re-observe
 
             # No blockers found — recon complete
             break
@@ -570,6 +705,14 @@ class DesktopAgent:
                 logger.error(f"Observation failed: {e}")
                 screen_state = {"summary": f"Error observing screen: {e}", "blocked": False}
             logger.info(f"Observation: {screen_state.get('summary', 'no summary')[:200]}")
+
+            # --- AUTO-DISMISS POPUPS (before thinking) ---
+            if screen_state.get("blocked", False):
+                dismissed = _detect_and_dismiss_popup(goal_lower=goal.lower() if goal else "")
+                if dismissed:
+                    logger.info(f"Execute phase: auto-dismissed popup: {dismissed}")
+                    time.sleep(0.5)
+                    continue  # Re-observe after dismissing
 
             # --- TAKEOVER CHECK (login, payment, CAPTCHA, 2FA) ---
             screen_text = screen_state.get("summary", "").lower()
@@ -2289,8 +2432,13 @@ class DesktopAgent:
             "default browser", "not your default", "set as default",
             "cookie banner", "cookie consent", "accept cookies",
             "sign in required", "login required",
-            "choose an app", "how do you want to open",
+            "choose an app", "how do you want to open", "select an app",
+            "open with", "windows cannot find",
             "overlay", "blocking",
+            "notification", "permission", "allow",
+            "update available", "restart to update",
+            "save changes", "do you want to save",
+            "confirm", "are you sure",
         ]
         not_blockers = [
             "terminal", "command prompt", "powershell", "cmd",
@@ -2854,18 +3002,31 @@ class DesktopAgent:
                 active2 = gw.getActiveWindow()
                 if active2 and "youtube" in (active2.title or "").lower():
                     self._handle_youtube_ads()
+
+            # Generic popup/dialog check after any action
+            dismissed = _detect_and_dismiss_popup(goal_lower=getattr(self, '_current_goal', '') or '')
+            if dismissed:
+                logger.info(f"Post-action: auto-dismissed popup: {dismissed}")
         except Exception as e:
             logger.debug(f"Post-action hook error: {e}")
 
     def _wait_for_app_ready(self, app_name, timeout=5):
         """Wait until a window matching app_name appears and is active.
-        Prevents cascading failures from acting before app is loaded."""
+        Prevents cascading failures from acting before app is loaded.
+        Also detects and dismisses blocking popups that appear during launch."""
         if not app_name:
             return
         import pygetwindow as gw
         start = time.time()
         while time.time() - start < timeout:
             try:
+                # Check for popups blocking the app launch
+                dismissed = _detect_and_dismiss_popup(goal_lower=app_name.lower())
+                if dismissed:
+                    logger.info(f"Wait-for-app: dismissed popup during launch: {dismissed}")
+                    time.sleep(0.5)
+                    continue
+
                 active = gw.getActiveWindow()
                 if active and active.title:
                     if app_name.lower() in active.title.lower():
@@ -2877,7 +3038,15 @@ class DesktopAgent:
                         try:
                             w.activate()
                         except Exception:
-                            pass
+                            # Force foreground with Win32 API
+                            try:
+                                import ctypes
+                                user32 = ctypes.windll.user32
+                                user32.keybd_event(0x12, 0, 0, 0)
+                                user32.keybd_event(0x12, 0, 2, 0)
+                                user32.SetForegroundWindow(w._hWnd)
+                            except Exception:
+                                pass
                         time.sleep(0.3)
                         logger.info(f"App found+activated: {w.title} (waited {time.time()-start:.1f}s)")
                         return

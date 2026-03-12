@@ -1261,9 +1261,9 @@ class Brain:
                         arrange_windows(names, "side-by-side" if len(names) == 2 else "grid")
                     except Exception:
                         pass
-                summaries = [f"{r[0]}({r[1].get('name', r[1].get('query', ''))}) → OK"
+                summaries = [f"{r[0]}({r[1].get('name', r[1].get('query', ''))}) -> OK"
                              for r in results if "error" not in r[2].lower()]
-                return f"Done — {', '.join(summaries)}" if summaries else "Some tasks failed."
+                return f"Done - {', '.join(summaries)}" if summaries else "Some tasks failed."
 
         # Clipboard URL auto-read: "read this link" / "summarize this page"
         import re as _re
@@ -1475,7 +1475,7 @@ class Brain:
         last_action_summary = ""
         if self._recent_actions:
             last_tool, last_args, last_result = self._recent_actions[-1]
-            last_action_summary = f"[Last action: {last_tool}({json.dumps(last_args)[:100]}) → {last_result[:100]}]"
+            last_action_summary = f"[Last action: {last_tool}({json.dumps(last_args)[:100]}) -> {last_result[:100]}]"
         self._ctx.reset(last_action_summary=last_action_summary)
         self._native_tools_failed = False
         self._prompt_mode_calls = 0

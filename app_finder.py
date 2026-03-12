@@ -10,6 +10,8 @@ Results are cached to disk and memory for instant repeat lookups.
 Fuzzy matching handles voice input variations like "VS Code" -> "Visual Studio Code".
 """
 
+import ctypes
+import ctypes.wintypes
 import json
 import logging
 import os
@@ -45,6 +47,30 @@ ALIASES = {
     "slack": "slack",
     "steam": "steam",
     "obs": "obs studio",
+}
+
+# Common Windows apps with direct exe paths — avoids "Select an app" popups
+# These are checked BEFORE protocol URIs to prevent file-association dialogs
+DIRECT_EXE_APPS = {
+    "notepad": "notepad.exe",
+    "calculator": "calc.exe",
+    "paint": "mspaint.exe",
+    "wordpad": "write.exe",
+    "snipping tool": "snippingtool.exe",
+    "task manager": "taskmgr.exe",
+    "control panel": "control.exe",
+    "device manager": "devmgmt.msc",
+    "disk management": "diskmgmt.msc",
+    "event viewer": "eventvwr.msc",
+    "regedit": "regedit.exe",
+    "registry editor": "regedit.exe",
+    "command prompt": "cmd.exe",
+    "cmd": "cmd.exe",
+    "powershell": "powershell.exe",
+    "windows terminal": "wt.exe",
+    "terminal": "wt.exe",
+    "file explorer": "explorer.exe",
+    "explorer": "explorer.exe",
 }
 
 # UWP / built-in Windows apps using protocol URIs
@@ -413,10 +439,28 @@ def launch_app(app_name):
     import webbrowser
     name_lower = app_name.lower().strip()
 
+    # 0. Direct exe apps — fast, no popups, no protocol URI issues
+    if name_lower in DIRECT_EXE_APPS:
+        exe = DIRECT_EXE_APPS[name_lower]
+        try:
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
+            DETACHED_PROCESS = 0x00000008
+            subprocess.Popen(
+                [exe], creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+                close_fds=True,
+            )
+            logger.info(f"Launched direct exe '{name_lower}' -> {exe}")
+            _activate_app_window(app_name, name_lower)
+            return f"Sure, I've opened {app_name} for you."
+        except OSError:
+            logger.debug(f"Direct exe '{exe}' failed, falling through")
+            # Fall through to protocol/registry search
+
     # 1. UWP / protocol apps (Settings, Calculator, etc.)
     if name_lower in WINDOWS_PROTOCOL_APPS:
         try:
             os.startfile(WINDOWS_PROTOCOL_APPS[name_lower])
+            _activate_app_window(app_name, name_lower, timeout=4.0)
             return f"Sure, opening {app_name} for you."
         except OSError as e:
             logger.error(f"Failed to open protocol app '{app_name}': {e}")
@@ -482,8 +526,15 @@ def launch_app(app_name):
     return f"I couldn't find {app_name} on your computer. Is it installed?"
 
 
-def _activate_app_window(display_name, name_lower, timeout=3.0):
-    """Wait for a newly launched app window to appear and bring it to foreground."""
+def _activate_app_window(display_name, name_lower, timeout=5.0):
+    """Wait for a newly launched app window to appear and bring it to foreground.
+
+    Uses multiple strategies:
+    1. pygetwindow.activate() (fast, works 80% of the time)
+    2. ctypes SetForegroundWindow (reliable Win32 API fallback)
+    3. Alt-key trick to bypass foreground lock restriction
+    Also detects and dismisses "Select an app" / "Open with" popups.
+    """
     import time
     try:
         import pygetwindow as gw
@@ -492,28 +543,98 @@ def _activate_app_window(display_name, name_lower, timeout=3.0):
 
     # Keywords to search for in window titles
     keywords = [name_lower]
-    # Add exe-derived keywords (e.g., "Steam" from display name)
     for word in display_name.lower().split():
         if len(word) > 2 and word not in ("the", "for", "and"):
             keywords.append(word)
 
+    def _force_foreground(hwnd):
+        """Bring window to foreground using Win32 API (more reliable than pygetwindow)."""
+        try:
+            user32 = ctypes.windll.user32
+            SW_RESTORE = 9
+            # Check if minimized and restore
+            if user32.IsIconic(hwnd):
+                user32.ShowWindow(hwnd, SW_RESTORE)
+                time.sleep(0.2)
+            # Alt-key trick: press and release Alt to bypass the foreground lock
+            # Windows prevents SetForegroundWindow unless the calling process is foreground
+            user32.keybd_event(0x12, 0, 0, 0)  # Alt down
+            user32.keybd_event(0x12, 0, 2, 0)  # Alt up
+            time.sleep(0.05)
+            result = user32.SetForegroundWindow(hwnd)
+            if not result:
+                # Second attempt: use BringWindowToTop
+                user32.BringWindowToTop(hwnd)
+                user32.SetForegroundWindow(hwnd)
+            return True
+        except Exception as e:
+            logger.debug(f"_force_foreground failed: {e}")
+            return False
+
+    def _dismiss_app_picker():
+        """Detect and dismiss 'Select an app' / 'Open with' popups."""
+        try:
+            active = gw.getActiveWindow()
+            if active and active.title:
+                title_lower = active.title.lower()
+                picker_keywords = [
+                    "select an app", "open with", "how do you want to open",
+                    "choose an app", "choose default", "windows cannot find",
+                    "look for an app", "select a default",
+                ]
+                if any(kw in title_lower for kw in picker_keywords):
+                    logger.info(f"Detected app picker popup: '{active.title}', dismissing")
+                    import pyautogui
+                    pyautogui.press("escape")
+                    time.sleep(0.5)
+                    return True
+        except Exception:
+            pass
+        return False
+
     start = time.time()
+    found_window = False
     while time.time() - start < timeout:
-        time.sleep(0.5)
+        time.sleep(0.4)
+
+        # Check for blocking popups first
+        _dismiss_app_picker()
+
         try:
             for w in gw.getAllWindows():
-                if not w.title or not w.visible:
+                if not w.title:
                     continue
                 title_lower = w.title.lower()
                 for kw in keywords:
                     if kw in title_lower:
+                        found_window = True
                         try:
+                            # First try pygetwindow
                             if w.isMinimized:
                                 w.restore()
+                                time.sleep(0.2)
                             w.activate()
                             logger.info(f"Activated window: {w.title}")
+                            return
                         except Exception:
-                            pass
+                            # Fallback: Win32 API force foreground
+                            hwnd = w._hWnd
+                            if _force_foreground(hwnd):
+                                logger.info(f"Force-activated window: {w.title}")
+                                return
+        except Exception:
+            pass
+
+    # If we found the window but couldn't activate it, try one more Win32 approach
+    if found_window:
+        try:
+            for w in gw.getAllWindows():
+                if not w.title:
+                    continue
+                title_lower = w.title.lower()
+                for kw in keywords:
+                    if kw in title_lower:
+                        _force_foreground(w._hWnd)
                         return
         except Exception:
             pass
