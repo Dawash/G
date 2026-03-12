@@ -323,6 +323,22 @@ class ToolExecutor:
             self._log_learning(user_input, tool_name, arguments, result,
                                cognition, experience_learner)
 
+        # --- Post-execution: universal popup check ---
+        # After any tool that interacts with desktop/apps, check for blocking popups.
+        # This catches popups on ANY user's system regardless of their setup.
+        _POPUP_CHECK_TOOLS = frozenset({
+            "open_app", "close_app", "run_terminal", "click_at", "type_text",
+            "press_key", "search_in_app", "agent_task", "manage_software",
+        })
+        if tool_name in _POPUP_CHECK_TOOLS:
+            try:
+                from desktop_agent import _detect_and_dismiss_popup
+                dismissed = _detect_and_dismiss_popup()
+                if dismissed:
+                    logger.info(f"Auto-dismissed popup after {tool_name}: {dismissed}")
+            except Exception:
+                pass
+
         # Sanitize result to prevent Unicode crashes on Windows console
         if isinstance(result, str):
             import re as _re

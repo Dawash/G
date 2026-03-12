@@ -87,6 +87,17 @@ def _run_terminal(command, admin=False):
     """Execute a PowerShell command with safety checks."""
     cmd_lower = command.lower().strip()
 
+    # Prevent "start <app>" from triggering app picker popups on any system.
+    # Convert "start notepad" → "Start-Process notepad.exe" etc.
+    # This is universal — works regardless of what apps are installed.
+    import re as _re_mod
+    _start_match = _re_mod.match(r'^start\s+(\w+)$', cmd_lower)
+    if _start_match:
+        app = _start_match.group(1)
+        # Add .exe if no extension to prevent file association popup
+        if '.' not in app:
+            command = f"Start-Process '{app}.exe' -ErrorAction SilentlyContinue"
+
     for blocked in _TERMINAL_BLOCKED:
         if blocked in cmd_lower:
             return f"Blocked for safety: '{command}' contains '{blocked}'"

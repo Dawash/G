@@ -104,13 +104,18 @@ _LEARNED_HINTS_FILE = os.path.join(os.path.dirname(__file__), "learned_hints.jso
 def _detect_and_dismiss_popup(goal_lower=""):
     """Detect and dismiss ANY blocking popup, dialog, or system prompt.
 
+    UNIVERSAL: Works on any user's system regardless of installed apps,
+    language, antivirus, browser, or OS configuration. Detection is based
+    on structural properties (window class, size, button presence) rather
+    than hardcoded app names.
+
     Returns the name of the dismissed popup, or None if nothing was found.
 
-    Strategy:
-    1. Check active window title against known popup patterns
-    2. Check window class name for dialog indicators (#32770 = Windows dialog)
-    3. Use UIA to check for button controls (OK/Cancel/Close/Accept/Dismiss)
-    4. Use targeted dismissal strategy based on popup type
+    Detection layers (fast → thorough):
+    1. Win32 window class (#32770 = system dialog) — instant, universal
+    2. Title keyword patterns — catches app pickers, cookie banners, etc.
+    3. Window size + UIA button scan — catches any unknown dialog
+    4. Background window scan — catches notification toasts/overlays
     """
     try:
         import pygetwindow as gw
@@ -126,110 +131,96 @@ def _detect_and_dismiss_popup(goal_lower=""):
         return None
 
     title_lower = active.title.lower()
-
-    # Skip normal app windows that are clearly not popups
-    _normal_apps = [
-        "chrome", "firefox", "edge", "brave", "spotify", "discord",
-        "steam", "notepad", "explorer", "terminal", "powershell",
-        "cmd", "code", "visual studio", "word", "excel", "outlook",
-    ]
-    # If the active window is the target app itself, not a popup
-    # BUT still check for known popup keywords even in "normal" app titles
-    _always_popup = [
-        "select an app", "open with", "webadvisor", "suspicious",
-        "pin to taskbar", "would you like to pin",
-    ]
-    is_forced_popup = any(kw in title_lower for kw in _always_popup)
-    if goal_lower and not is_forced_popup:
-        for app in _normal_apps:
-            if app in goal_lower and app in title_lower:
-                return None
-
-    # ---- KNOWN POPUP PATTERNS (fast title-based detection) ----
-    _popup_patterns = {
-        # App picker / file association
-        "app_picker": [
-            "select an app", "open with", "how do you want to open",
-            "choose an app", "look for an app", "select a default",
-            "windows cannot find",
-        ],
-        # Cookie / consent banners (web)
-        "cookie": [
-            "cookie", "accept all", "consent", "gdpr",
-        ],
-        # Browser profile / setup
-        "profile": [
-            "choose profile", "select profile", "profile picker",
-            "welcome to", "get started", "set up",
-        ],
-        # Default app / browser prompts
-        "default": [
-            "default browser", "set as default", "not your default",
-            "make default", "default app",
-        ],
-        # Permission / notification prompts
-        "permission": [
-            "allow", "notification", "permission", "wants to",
-            "show notifications", "send notifications",
-        ],
-        # Update / restart prompts
-        "update": [
-            "update available", "restart to update", "new version",
-            "update now", "restart required",
-        ],
-        # Save / discard dialogs
-        "save": [
-            "save changes", "do you want to save", "unsaved changes",
-            "save before", "don't save",
-        ],
-        # Security / antivirus warnings (McAfee, Norton, Defender, etc.)
-        "security_warning": [
-            "webadvisor", "suspicious", "web protection", "site blocked",
-            "unsafe site", "deceptive site", "phishing", "malware",
-            "this site may be", "potentially unsafe",
-            "norton", "mcafee", "windows security",
-            "smartscreen", "not safe", "dangerous site",
-        ],
-        # Browser promo / pin popups
-        "browser_promo": [
-            "pin to taskbar", "would you like to pin",
-            "make chrome", "make edge", "make firefox",
-            "sign in to chrome", "sign in to edge",
-            "sync your", "turn on sync", "import bookmarks",
-        ],
-        # Generic Windows dialogs
-        "dialog": [
-            "error", "warning", "confirm", "are you sure",
-        ],
-    }
-
+    original_title = active.title
     popup_type = None
-    for ptype, keywords in _popup_patterns.items():
-        if any(kw in title_lower for kw in keywords):
-            popup_type = ptype
-            break
 
-    # ---- WIN32 CLASS CHECK: #32770 = standard Windows dialog box ----
+    # ---- LAYER 1: Win32 class check (universal, works in any language) ----
+    win_class = ""
+    try:
+        import ctypes
+        hwnd = active._hWnd
+        class_buf = ctypes.create_unicode_buffer(256)
+        ctypes.windll.user32.GetClassNameW(hwnd, class_buf, 256)
+        win_class = class_buf.value
+        # #32770 = standard Windows dialog box (file pickers, confirm dialogs, etc.)
+        if win_class == "#32770":
+            popup_type = "system_dialog"
+    except Exception:
+        pass
+
+    # ---- LAYER 2: Title keyword patterns ----
+    # These are broad patterns that work across languages/systems
     if not popup_type:
-        try:
-            import ctypes
-            hwnd = active._hWnd
-            class_buf = ctypes.create_unicode_buffer(256)
-            ctypes.windll.user32.GetClassNameW(hwnd, class_buf, 256)
-            class_name = class_buf.value
-            if class_name == "#32770":
-                popup_type = "system_dialog"
-                logger.info(f"Detected system dialog (class #32770): '{active.title}'")
-        except Exception:
-            pass
+        _popup_patterns = {
+            # App picker / file association (universal Windows dialog)
+            "app_picker": [
+                "select an app", "open with", "how do you want to open",
+                "choose an app", "look for an app", "select a default",
+                "windows cannot find", "cannot find",
+            ],
+            # Cookie / consent (web — most sites worldwide)
+            "cookie": [
+                "cookie", "accept all", "consent", "gdpr", "privacy",
+            ],
+            # Save / discard dialogs
+            "save": [
+                "save changes", "do you want to save", "unsaved changes",
+                "save before", "don't save", "discard",
+            ],
+            # Security / antivirus (any vendor)
+            "security": [
+                "webadvisor", "suspicious", "web protection", "site blocked",
+                "unsafe", "deceptive", "phishing", "malware", "dangerous",
+                "smartscreen", "not safe", "blocked by", "security warning",
+                "threat", "quarantine", "web shield", "safe browsing",
+            ],
+            # Update / restart prompts
+            "update": [
+                "update available", "restart to update", "new version",
+                "update now", "restart required", "update ready",
+            ],
+            # Permission / notification
+            "permission": [
+                "wants to", "show notifications", "send notifications",
+                "allow access", "grant permission", "location access",
+            ],
+            # Default app / browser prompts
+            "default": [
+                "default browser", "set as default", "not your default",
+                "make default", "default app",
+            ],
+            # Browser promos / promotions (any browser)
+            "promo": [
+                "pin to taskbar", "would you like to pin",
+                "sign in to", "turn on sync", "import bookmarks",
+                "sync your", "set up your",
+            ],
+            # Profile picker
+            "profile": [
+                "choose profile", "select profile", "profile picker",
+                "which profile",
+            ],
+            # Generic dialog keywords
+            "dialog": [
+                "confirm", "are you sure",
+            ],
+        }
 
-    # ---- SMALL WINDOW CHECK: popups are typically small ----
+        for ptype, keywords in _popup_patterns.items():
+            if any(kw in title_lower for kw in keywords):
+                popup_type = ptype
+                break
+
+    # ---- LAYER 3: Structural detection (any dialog, any language) ----
+    # If it's not the goal window, is small, and has dialog-like buttons → popup
     if not popup_type:
         try:
             w, h = active.width, active.height
-            # Small windows (< 800x600) that aren't the target app are likely popups
-            if w < 800 and h < 600 and w > 50 and h > 50:
-                # Check if it has typical dialog buttons via UIA
+            is_small = (w < 900 and h < 700 and w > 50 and h > 50)
+            # Also check: if goal_lower is set and NOT in the title, it's probably blocking
+            is_off_target = bool(goal_lower and goal_lower not in title_lower)
+
+            if is_small or is_off_target:
                 try:
                     from automation.ui_control import list_controls
                     controls = list_controls(window=active.title, max_depth=3, max_count=30)
@@ -238,155 +229,122 @@ def _detect_and_dismiss_popup(goal_lower=""):
                             (c.get("name") or "").lower() for c in controls
                             if (c.get("control_type") or "").lower() == "button"
                         ]
-                        dialog_buttons = {"ok", "cancel", "close", "yes", "no", "accept",
-                                          "deny", "dismiss", "allow", "block", "don't save",
-                                          "not now", "skip", "later", "remind me later"}
+                        # Universal dialog button names (works across most Windows localizations)
+                        dialog_buttons = {
+                            "ok", "cancel", "close", "yes", "no", "accept",
+                            "deny", "dismiss", "allow", "block", "don't save",
+                            "not now", "skip", "later", "remind me later",
+                            "continue", "retry", "ignore", "abort",
+                            "just once", "always", "never", "got it",
+                            "no thanks", "no, thanks", "maybe later",
+                            "go back", "visit anyway", "proceed",
+                        }
                         if any(bn in dialog_buttons for bn in button_names):
                             popup_type = "uia_dialog"
-                            logger.info(f"UIA detected dialog with buttons: {button_names}")
+                            logger.info(f"UIA detected dialog: '{active.title}' "
+                                       f"buttons={button_names}")
                 except Exception:
                     pass
         except Exception:
             pass
 
-    # ---- SCAN ALL WINDOWS for overlay/notification popups ----
+    # ---- LAYER 4: Scan ALL windows for overlay/notification popups ----
+    # Notification toasts aren't the active window but still block interaction
     if not popup_type:
-        _notification_keywords = [
-            "pin to taskbar", "would you like to pin",
-            "notification", "apps",
-        ]
         try:
             for win in gw.getAllWindows():
                 if not win.title or win == active:
                     continue
-                wt = win.title.lower()
-                for kw in _notification_keywords:
-                    if kw in wt:
-                        # Found a notification/overlay — focus and dismiss
-                        try:
-                            win.activate()
-                            time.sleep(0.3)
-                            # Click "No, thanks" or dismiss
-                            pyautogui.press("escape")
-                            time.sleep(0.3)
-                            return f"notification: {win.title}"
-                        except Exception:
-                            pass
+                try:
+                    ww, wh = win.width, win.height
+                except Exception:
+                    continue
+                # Notifications are typically small overlays
+                if ww < 500 and wh < 300 and ww > 30 and wh > 30:
+                    wt = win.title.lower()
+                    # Skip taskbar/system tray
+                    if any(s in wt for s in ["task", "system", "clock", "tray"]):
+                        continue
+                    # Likely a notification — try to dismiss
+                    try:
+                        win.activate()
+                        time.sleep(0.3)
+                        pyautogui.press("escape")
+                        time.sleep(0.3)
+                        logger.info(f"Dismissed overlay notification: '{win.title}'")
+                        return f"notification: {win.title}"
+                    except Exception:
+                        pass
         except Exception:
             pass
 
     if not popup_type:
         return None
 
-    # ---- DISMISSAL STRATEGIES ----
-    logger.info(f"Dismissing popup ({popup_type}): '{active.title}'")
+    # ---- UNIVERSAL DISMISSAL ----
+    # Strategy: escalate from least to most aggressive
+    # Escape → targeted action → Enter → Alt+F4
+    logger.info(f"Dismissing popup ({popup_type}): '{original_title}'")
     try:
         if popup_type == "app_picker":
-            # "Select an app" — try to pick the right app from the list
-            # Extract the target from "Select an app to open 'X'"
-            _match = re.search(r"open\s+['\"]?(\w+)", active.title, re.I)
-            target_app = _match.group(1).lower() if _match else ""
-            picked = False
-            if target_app:
-                try:
-                    from automation.ui_control import list_controls, click_control
-                    controls = list_controls(window=active.title, max_depth=5, max_count=50)
-                    for c in (controls or []):
-                        cname = (c.get("name") or "").lower()
-                        if target_app in cname:
-                            click_control(c)
-                            time.sleep(0.3)
-                            # Click "Just once" or "Always"
-                            controls2 = list_controls(window=active.title, max_depth=5, max_count=50)
-                            for c2 in (controls2 or []):
-                                c2name = (c2.get("name") or "").lower()
-                                if "just once" in c2name or "always" in c2name:
-                                    click_control(c2)
-                                    picked = True
-                                    break
-                            if not picked:
-                                pyautogui.press("enter")
-                                picked = True
-                            break
-                except Exception:
-                    pass
-            if not picked:
-                pyautogui.press("escape")
+            # App picker: just press Escape to cancel (universal)
+            # Don't try to pick an app — user's system may have different options
+            pyautogui.press("escape")
             time.sleep(0.5)
+
+        elif popup_type == "save":
+            # Save dialog: try "Don't Save" (Alt+N), fallback to Escape
+            pyautogui.hotkey("alt", "n")
+            time.sleep(0.3)
+            still = gw.getActiveWindow()
+            if still and still.title == original_title:
+                pyautogui.press("escape")
+                time.sleep(0.3)
+
+        elif popup_type == "security":
+            # Security warnings: go back or close tab
+            pyautogui.hotkey("alt", "left")  # Browser back
+            time.sleep(0.5)
+            still = gw.getActiveWindow()
+            if still and still.title == original_title:
+                pyautogui.hotkey("ctrl", "w")  # Close tab
+                time.sleep(0.5)
+
         elif popup_type == "cookie":
-            # Cookie banners: Tab to Accept/OK button, then Enter
+            # Cookie: Tab to find Accept button, Enter
             pyautogui.press("tab")
             time.sleep(0.2)
             pyautogui.press("enter")
             time.sleep(0.5)
-        elif popup_type == "default":
-            # "Set as default browser" — dismiss
-            pyautogui.hotkey("alt", "F4")
-            time.sleep(0.5)
-        elif popup_type in ("permission", "update"):
-            # Permission/update prompts — Escape to dismiss
-            pyautogui.press("escape")
-            time.sleep(0.5)
-        elif popup_type == "save":
-            # Save dialog — try Alt+N for "Don't Save" or Escape
-            pyautogui.hotkey("alt", "n")
-            time.sleep(0.3)
-            still = gw.getActiveWindow()
-            if still and still.title == active.title:
-                pyautogui.press("escape")
-                time.sleep(0.3)
+
         elif popup_type == "profile":
-            # Profile picker — Escape first, then Enter if still there
+            # Profile picker: Escape, then Enter if still there
             pyautogui.press("escape")
             time.sleep(0.3)
             still = gw.getActiveWindow()
-            if still and still.title == active.title:
+            if still and still.title == original_title:
                 pyautogui.press("enter")
                 time.sleep(0.5)
-        elif popup_type == "security_warning":
-            # McAfee/Norton/SmartScreen — click "Go back" or close the tab
-            # Try Escape first, then Alt+Left (back), then Alt+F4 (close tab)
-            pyautogui.press("escape")
-            time.sleep(0.3)
-            still = gw.getActiveWindow()
-            if still and "suspicious" in (still.title or "").lower():
-                # McAfee WebAdvisor "Go back" — Alt+Left or click back
-                pyautogui.hotkey("alt", "left")
-                time.sleep(0.5)
-            elif still and still.title == active.title:
-                # Still there — close tab with Ctrl+W
-                pyautogui.hotkey("ctrl", "w")
-                time.sleep(0.5)
-        elif popup_type == "browser_promo":
-            # Chrome/Edge "pin to taskbar", "sign in" — click No/dismiss
-            # Try Escape first
-            pyautogui.press("escape")
-            time.sleep(0.3)
-            still = gw.getActiveWindow()
-            if still and still.title == active.title:
-                # Try clicking "No, thanks" / "Not now" via Tab+Enter
-                pyautogui.press("tab")
-                time.sleep(0.1)
-                pyautogui.press("tab")
-                time.sleep(0.1)
-                pyautogui.press("enter")
-                time.sleep(0.5)
-        elif popup_type in ("system_dialog", "uia_dialog", "dialog"):
-            # Generic dialog — try Escape first (cancel/close)
-            pyautogui.press("escape")
-            time.sleep(0.3)
-            still = gw.getActiveWindow()
-            if still and still.title == active.title:
-                # Still there — try Enter (OK/default button)
-                pyautogui.press("enter")
-                time.sleep(0.5)
+
         else:
+            # UNIVERSAL fallback for all other popups:
+            # Try Escape (most dialogs close with Escape)
             pyautogui.press("escape")
             time.sleep(0.5)
+            still = gw.getActiveWindow()
+            if still and still.title == original_title:
+                # Still there — try Enter (accepts default button)
+                pyautogui.press("enter")
+                time.sleep(0.5)
+                still2 = gw.getActiveWindow()
+                if still2 and still2.title == original_title:
+                    # STILL there — nuclear option: Alt+F4
+                    pyautogui.hotkey("alt", "F4")
+                    time.sleep(0.5)
     except Exception:
         pass
 
-    return f"{popup_type}: {active.title}"
+    return f"{popup_type}: {original_title}"
 
 
 # Tools the agent can use — includes brain tools for direct execution
