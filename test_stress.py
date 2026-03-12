@@ -436,6 +436,73 @@ def t_system_info():
 test("System info query", t_system_info)
 
 # =====================================================
+# 12. USER CHOICE — Interactive system
+# =====================================================
+print("\n[12] USER CHOICE — Interactive System\n")
+
+def t_choice_parse():
+    from user_choice import _parse_choice, AUTO_PICK
+    opts = ["Option A", "Option B", "Option C"]
+    assert _parse_choice("1", opts) == 0
+    assert _parse_choice("second", opts) == 1
+    assert _parse_choice("last", opts) == 2
+    assert _parse_choice("pick for me", opts) == AUTO_PICK
+    assert _parse_choice("use any", opts) == AUTO_PICK
+    assert _parse_choice("cancel", opts) is None
+    assert _parse_choice("option 2", opts) == 1
+    return "7 parse patterns OK"
+test("Choice parsing", t_choice_parse)
+
+def t_choice_fuzzy():
+    from user_choice import _parse_choice
+    opts = ["john@gmail.com", "work@gmail.com", "personal@gmail.com"]
+    assert _parse_choice("john", opts) == 0
+    assert _parse_choice("work", opts) == 1
+    assert _parse_choice("personal", opts) == 2
+    return "Fuzzy email matching OK"
+test("Choice fuzzy matching", t_choice_fuzzy)
+
+def t_choice_tools_registered():
+    from brain import _tool_registry
+    for name in ['ask_user_choice', 'ask_user_input', 'ask_yes_no']:
+        spec = _tool_registry.get(name)
+        assert spec is not None, f"{name} not registered"
+        assert spec.core is True, f"{name} not core"
+    return "3 interactive tools registered as core"
+test("Interactive tools in brain", t_choice_tools_registered)
+
+def t_choice_llm_uses():
+    """Test that the LLM actually calls ask_user_choice for multi-option scenarios."""
+    import requests, json
+    from brain import _tool_registry
+    schemas = _tool_registry.build_llm_schemas(core_only=True)
+    relevant = [s for s in schemas if s['function']['name'] in
+        ('ask_user_choice', 'ask_user_input', 'ask_yes_no', 'open_app', 'google_search')]
+    resp = requests.post(
+        f"{ollama_url}/api/chat",
+        json={
+            "model": ollama_model,
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant. When facing multiple options, use ask_user_choice."},
+                {"role": "user", "content": "I want to log in to Gmail. I have john@gmail.com and work@gmail.com."}
+            ],
+            "stream": False,
+            "tools": relevant,
+            "options": {"temperature": 0.1, "num_predict": 300},
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    msg = resp.json()["message"]
+    tc = msg.get("tool_calls", [])
+    if tc:
+        tool_name = tc[0]["function"]["name"]
+        assert tool_name in ("ask_user_choice", "ask_user_input"), f"Wrong tool: {tool_name}"
+        return f"LLM used {tool_name}"
+    return f"LLM responded without tool (content: {msg.get('content', '')[:60]})"
+test("LLM uses ask_user_choice", t_choice_llm_uses)
+
+# =====================================================
 # SUMMARY
 # =====================================================
 print(f"\n{'=' * 55}")
