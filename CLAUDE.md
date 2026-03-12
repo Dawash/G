@@ -42,6 +42,7 @@ weather.py          → Open-Meteo API: current conditions, forecast, rain alert
 reminders.py        → NLP time parsing, recurring, background checker
 alarms.py           → Morning alarm system: sound playback, voice dismiss, LLM motivation, weather+news briefing
 news.py             → Google News RSS, multi-category, BBC fallback
+user_choice.py      → Interactive multi-choice system: present options, parse voice/keyboard input
 self_test.py        → Runtime diagnostics: 17 tests across core subsystems
 legacy/             → Archived files (main3.py, openclaw_bridge.py)
 ```
@@ -98,6 +99,8 @@ The intelligent core — 18 core tools for Ollama, full set for cloud providers:
 **Web & Communication** (3): `web_read`, `web_search_answer`, `send_email`
 
 **Self-Management** (3): `create_file`, `run_self_test`, `restart_assistant`
+
+**Interactive** (3): `ask_user_choice`, `ask_user_input`, `ask_yes_no`
 
 **Meta Brain** (5): `spawn_agents`, `chain_tasks`, `create_tool`, `analyze_and_improve`, `reason_deeply`
 
