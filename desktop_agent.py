@@ -134,7 +134,13 @@ def _detect_and_dismiss_popup(goal_lower=""):
         "cmd", "code", "visual studio", "word", "excel", "outlook",
     ]
     # If the active window is the target app itself, not a popup
-    if goal_lower:
+    # BUT still check for known popup keywords even in "normal" app titles
+    _always_popup = [
+        "select an app", "open with", "webadvisor", "suspicious",
+        "pin to taskbar", "would you like to pin",
+    ]
+    is_forced_popup = any(kw in title_lower for kw in _always_popup)
+    if goal_lower and not is_forced_popup:
         for app in _normal_apps:
             if app in goal_lower and app in title_lower:
                 return None
@@ -175,6 +181,21 @@ def _detect_and_dismiss_popup(goal_lower=""):
         "save": [
             "save changes", "do you want to save", "unsaved changes",
             "save before", "don't save",
+        ],
+        # Security / antivirus warnings (McAfee, Norton, Defender, etc.)
+        "security_warning": [
+            "webadvisor", "suspicious", "web protection", "site blocked",
+            "unsafe site", "deceptive site", "phishing", "malware",
+            "this site may be", "potentially unsafe",
+            "norton", "mcafee", "windows security",
+            "smartscreen", "not safe", "dangerous site",
+        ],
+        # Browser promo / pin popups
+        "browser_promo": [
+            "pin to taskbar", "would you like to pin",
+            "make chrome", "make edge", "make firefox",
+            "sign in to chrome", "sign in to edge",
+            "sync your", "turn on sync", "import bookmarks",
         ],
         # Generic Windows dialogs
         "dialog": [
@@ -228,6 +249,32 @@ def _detect_and_dismiss_popup(goal_lower=""):
         except Exception:
             pass
 
+    # ---- SCAN ALL WINDOWS for overlay/notification popups ----
+    if not popup_type:
+        _notification_keywords = [
+            "pin to taskbar", "would you like to pin",
+            "notification", "apps",
+        ]
+        try:
+            for win in gw.getAllWindows():
+                if not win.title or win == active:
+                    continue
+                wt = win.title.lower()
+                for kw in _notification_keywords:
+                    if kw in wt:
+                        # Found a notification/overlay — focus and dismiss
+                        try:
+                            win.activate()
+                            time.sleep(0.3)
+                            # Click "No, thanks" or dismiss
+                            pyautogui.press("escape")
+                            time.sleep(0.3)
+                            return f"notification: {win.title}"
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
     if not popup_type:
         return None
 
@@ -235,8 +282,36 @@ def _detect_and_dismiss_popup(goal_lower=""):
     logger.info(f"Dismissing popup ({popup_type}): '{active.title}'")
     try:
         if popup_type == "app_picker":
-            # "Select an app" — press Escape to cancel
-            pyautogui.press("escape")
+            # "Select an app" — try to pick the right app from the list
+            # Extract the target from "Select an app to open 'X'"
+            _match = re.search(r"open\s+['\"]?(\w+)", active.title, re.I)
+            target_app = _match.group(1).lower() if _match else ""
+            picked = False
+            if target_app:
+                try:
+                    from automation.ui_control import list_controls, click_control
+                    controls = list_controls(window=active.title, max_depth=5, max_count=50)
+                    for c in (controls or []):
+                        cname = (c.get("name") or "").lower()
+                        if target_app in cname:
+                            click_control(c)
+                            time.sleep(0.3)
+                            # Click "Just once" or "Always"
+                            controls2 = list_controls(window=active.title, max_depth=5, max_count=50)
+                            for c2 in (controls2 or []):
+                                c2name = (c2.get("name") or "").lower()
+                                if "just once" in c2name or "always" in c2name:
+                                    click_control(c2)
+                                    picked = True
+                                    break
+                            if not picked:
+                                pyautogui.press("enter")
+                                picked = True
+                            break
+                except Exception:
+                    pass
+            if not picked:
+                pyautogui.press("escape")
             time.sleep(0.5)
         elif popup_type == "cookie":
             # Cookie banners: Tab to Accept/OK button, then Enter
@@ -266,6 +341,34 @@ def _detect_and_dismiss_popup(goal_lower=""):
             time.sleep(0.3)
             still = gw.getActiveWindow()
             if still and still.title == active.title:
+                pyautogui.press("enter")
+                time.sleep(0.5)
+        elif popup_type == "security_warning":
+            # McAfee/Norton/SmartScreen — click "Go back" or close the tab
+            # Try Escape first, then Alt+Left (back), then Alt+F4 (close tab)
+            pyautogui.press("escape")
+            time.sleep(0.3)
+            still = gw.getActiveWindow()
+            if still and "suspicious" in (still.title or "").lower():
+                # McAfee WebAdvisor "Go back" — Alt+Left or click back
+                pyautogui.hotkey("alt", "left")
+                time.sleep(0.5)
+            elif still and still.title == active.title:
+                # Still there — close tab with Ctrl+W
+                pyautogui.hotkey("ctrl", "w")
+                time.sleep(0.5)
+        elif popup_type == "browser_promo":
+            # Chrome/Edge "pin to taskbar", "sign in" — click No/dismiss
+            # Try Escape first
+            pyautogui.press("escape")
+            time.sleep(0.3)
+            still = gw.getActiveWindow()
+            if still and still.title == active.title:
+                # Try clicking "No, thanks" / "Not now" via Tab+Enter
+                pyautogui.press("tab")
+                time.sleep(0.1)
+                pyautogui.press("tab")
+                time.sleep(0.1)
                 pyautogui.press("enter")
                 time.sleep(0.5)
         elif popup_type in ("system_dialog", "uia_dialog", "dialog"):
@@ -2439,6 +2542,9 @@ class DesktopAgent:
             "update available", "restart to update",
             "save changes", "do you want to save",
             "confirm", "are you sure",
+            "suspicious", "webadvisor", "site blocked", "unsafe",
+            "pin to taskbar", "would you like to pin",
+            "smartscreen", "malware", "phishing", "deceptive",
         ]
         not_blockers = [
             "terminal", "command prompt", "powershell", "cmd",

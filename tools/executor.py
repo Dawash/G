@@ -130,7 +130,8 @@ class ToolExecutor:
                 from tools.isolated_executor import IsolatedToolExecutor
                 if not hasattr(self, '_isolated'):
                     self._isolated = IsolatedToolExecutor(max_workers=2, default_timeout=30)
-                result = self._isolated.execute(tool_name, arguments or {}, timeout=30)
+                iso_timeout = _get_scaled_timeout(tool_name)
+                result = self._isolated.execute(tool_name, arguments or {}, timeout=iso_timeout)
                 duration = int((time.time() - start_time) * 1000)
                 safety = _SAFETY_MAP.get(spec.safety, spec.safety)
                 success = not any(w in str(result).lower()
