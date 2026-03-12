@@ -354,7 +354,15 @@ def _setup_new():
                 print(f"  {k:>2}. {name:<22s} — {desc}")
         print()
         max_opt = len(_OLLAMA_MODELS)
-        ollama_choice = input(f"  Pick (1-{max_opt}, default 1): ").strip() or "1"
+        # Smart default: recommend 32b for 48GB+ RAM, 14b for 24GB+, 7b otherwise
+        _default = "1"  # qwen2.5:7b
+        if _ram_gb >= 48:
+            _default = "10"  # qwen2.5:32b
+            print(f"  With {_ram_gb:.0f} GB RAM, qwen2.5:32b (option 10) is recommended for best quality!")
+        elif _ram_gb >= 24:
+            _default = "8"   # qwen2.5:14b
+            print(f"  With {_ram_gb:.0f} GB RAM, qwen2.5:14b (option 8) is recommended!")
+        ollama_choice = input(f"  Pick (1-{max_opt}, default {_default}): ").strip() or _default
         if ollama_choice in _OLLAMA_MODELS:
             ollama_model = _OLLAMA_MODELS[ollama_choice][0]
         else:
