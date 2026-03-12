@@ -116,6 +116,8 @@ AVAILABLE_TOOLS = [
     "manage_tabs", "fill_form",
     # Browser automation (Phase 17)
     "browser_action",
+    # Interactive user-choice tools (Phase 18)
+    "ask_user_choice", "ask_user_input", "ask_yes_no",
 ]
 
 # Tool escalation paths: if tool A fails, try tool B
@@ -2596,6 +2598,8 @@ class DesktopAgent:
         "set_reminder": 5, "web_read": 15,
         # Precision interaction
         "click_element": 5, "find_on_screen": 10, "manage_tabs": 5, "fill_form": 10,
+        # Interactive (user waits to respond)
+        "ask_user_choice": 60, "ask_user_input": 60, "ask_yes_no": 30,
     }
 
     def _act(self, decision):
