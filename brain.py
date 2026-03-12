@@ -2140,9 +2140,23 @@ class Brain:
         # Ollama speed optimizations
         if self.provider_name == "ollama":
             payload["stream"] = False
+            # Scale context window based on model size
+            _model_lower = (self.ollama_model or "").lower()
+            if any(s in _model_lower for s in ("72b", "70b")):
+                _num_ctx = 32768   # 32K for 70B+ models
+                _num_predict = 1024
+            elif any(s in _model_lower for s in ("32b", "27b")):
+                _num_ctx = 24576   # 24K for 27-32B models
+                _num_predict = 768
+            elif any(s in _model_lower for s in ("14b", "13b")):
+                _num_ctx = 20480   # 20K for 13-14B models
+                _num_predict = 640
+            else:
+                _num_ctx = 16384   # 16K for 7B and smaller
+                _num_predict = 512
             payload["options"] = {
-                "num_predict": 512,  # 350 caused JSON truncation on complex tool calls
-                "num_ctx": 16384,    # 16K gives ample room for tools (~1350 tokens) + system prompt + messages
+                "num_predict": _num_predict,
+                "num_ctx": _num_ctx,
                 "temperature": 0.3,  # Lower = more deterministic tool selection, fewer hallucinations
             }
 
