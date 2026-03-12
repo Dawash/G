@@ -83,6 +83,7 @@ from tools.system_tools import register_system_tools as _register_system_tools
 from tools.desktop_tools import register_desktop_tools as _register_desktop_tools
 from tools.memory_workflow_tools import register_memory_workflow_tools as _register_mw_tools
 from tools.browser_tools import register_browser_tools as _register_browser_tools
+from tools.interactive_tools import register_interactive_tools as _register_interactive_tools
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,7 @@ _register_system_tools(_tool_registry)
 _register_desktop_tools(_tool_registry)
 _register_browser_tools(_tool_registry)  # CDP persistent session (overwrites desktop_tools browser_action)
 _register_mw_tools(_tool_registry)
+_register_interactive_tools(_tool_registry)  # ask_user_choice, ask_user_input, ask_yes_no
 
 # Set registry as the global default (used by brain_defs.py for resolution)
 from tools.registry import set_default as _set_default_registry

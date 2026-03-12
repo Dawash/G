@@ -2423,7 +2423,22 @@ class DesktopAgent:
             f'- click_element: {{"name": "Skip Ad"}} — click UI element by exact name (uses accessibility tree, most precise)\n'
             f'- manage_tabs: {{"action": "new|close|next|prev|goto|list"}} — browser tab management\n'
             f'- fill_form: {{"fields": {{"username": "john", "password": "1234"}}}} — fill form fields by name\n'
+            f'- ask_user_choice: {{"question": "Which one?", "options": ["A", "B", "C"]}} — ask user to pick from options\n'
+            f'- ask_user_input: {{"question": "Enter your email:"}} — ask user for text input (sensitive=true for passwords)\n'
+            f'- ask_yes_no: {{"question": "Should I proceed?"}}} — ask yes/no question\n'
             f"{self._get_openclaw_tools_prompt()}\n"
+            f"USER INTERACTION RULES:\n"
+            f"- When you see MULTIPLE OPTIONS on screen (accounts, items, varieties, search results),\n"
+            f"  use ask_user_choice to let the user pick. Example:\n"
+            f'  {{"action": "USE_TOOL", "tool": "ask_user_choice", "args": {{"question": "Which account?", '
+            f'"options": ["john@gmail.com", "work@gmail.com"]}}}}\n'
+            f"- When you need user input (email, password, search term), use ask_user_input.\n"
+            f'  {{"action": "USE_TOOL", "tool": "ask_user_input", "args": {{"question": "Enter your email:", '
+            f'"sensitive": false}}}}\n'
+            f"  For passwords: set sensitive=true.\n"
+            f"- When you need a yes/no decision, use ask_yes_no.\n"
+            f"- NEVER guess login credentials or make choices for the user without asking first.\n"
+            f"- If the user previously said 'pick for me' or 'you choose', the tool returns that — proceed with your best choice.\n\n"
             f"IMPORTANT RULES:\n"
             f"- ALWAYS prefer direct tools over UI clicking — they're faster and more reliable.\n"
             f"  * System info (disk, RAM, CPU, processes, network) → run_terminal\n"
