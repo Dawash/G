@@ -148,8 +148,13 @@ def play_music(action, query=None, app="spotify", last_user_input="", quick_chat
                             pyautogui.typewrite(query, interval=0.03)
                         time.sleep(3.5)
 
-                    # Step 2: Click first result via UIA (proper desktop automation)
-                    from computer import _click_first_spotify_song
+                    # Step 2: Check for no results before trying to click
+                    from computer import _click_first_spotify_song, _spotify_no_results
+                    if _spotify_no_results():
+                        logger.info(f"Spotify: no results for '{query}'")
+                        return f"No results found for '{query}' on Spotify. Try a different search term."
+
+                    # Step 3: Click first result via UIA (proper desktop automation)
                     if _click_first_spotify_song():
                         # Verify playback
                         try:
@@ -167,6 +172,9 @@ def play_music(action, query=None, app="spotify", last_user_input="", quick_chat
                         except ImportError:
                             pass
                         return f"Playing '{query}' on Spotify."
+                    # Check again — click failure might be due to no results
+                    if _spotify_no_results():
+                        return f"No results found for '{query}' on Spotify. Try a different search term."
                     logger.warning("Spotify UIA click-to-play failed")
                 except Exception as e:
                     logger.error(f"Failed to search in Spotify: {e}")

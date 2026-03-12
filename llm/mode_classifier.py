@@ -53,10 +53,14 @@ AGENT_PATTERNS = [
     # Search in a specific app + play/interact
     r"search\b.+\b(in|on|using)\s+(spotify|youtube|chrome|firefox|edge|browser)",
     r"(search|look)\s+(for\s+)?.+\s+on\s+(youtube|spotify)\s+and\s+(play|open|watch)",
-    # Play music/video with context — needs UI interaction to complete
-    r"(play|listen to|watch|put on)\s+.{1,50}\s+(on|in)\s+(youtube|spotify)\s+and\s+(play|watch|listen)",
-    # YouTube-specific: "search X on YouTube and play a video"
-    r"(search|find|look for)\s+.+\s+on\s+youtube",
+    # Play music/video on apps — requires UI interaction (search, click results, verify playback)
+    r"(play|listen to|watch|put on)\s+.{1,50}\s+(on|in|using|with)\s+(youtube|spotify)",
+    r"(play|listen to|watch|put on)\s+(some |a |the |my )?(good |best |romantic |awesome |sad |soft )?(music|song|songs|track|video)\s+(on|in|using|with)\s+(youtube|spotify)",
+    # Spotify/YouTube interaction — always needs agent for UI automation
+    r"(search|find|look for|play)\s+.+\s+on\s+(youtube|spotify)",
+    r"(open|launch)\s+(youtube|spotify)\s+and\s+(play|search|find|watch|listen)",
+    # Generic "play X on Y" — needs agent to handle search + click + verify
+    r"(play|listen to)\s+.+\s+(on|in)\s+(spotify|youtube)",
     # Form/navigation tasks
     r"\b(fill out|fill in|complete the form|submit the form)\b",
     r"\bnavigate to .+ and (click|fill|submit|select|type)\b",
@@ -71,7 +75,7 @@ AGENT_PATTERNS = [
     # Download / install tasks
     r"\b(download|install)\b.+\b(from|on)\s+",
     # Log in / sign in
-    r"\b(log in|sign in|login|signin)\b.+\b(to|on|into)\b",
+    r"\b(log ?in(?:to)?|sign ?in(?:to)?|login|signin)\b.+\b(to|on|into|my|the)?\b",
     # Window arrangement
     r"snap\b.+\b(left|right|top|bottom)",
     r"arrange\b.+\bwindows",
@@ -80,6 +84,9 @@ AGENT_PATTERNS = [
     r"(save|export)\s+this\s+(page|tab)\s+as\s+pdf",
     r"run\s+this\s+(file|script|code)",
     r"open\s+terminal\s+here",
+    # Order/shop/book — requires web UI interaction
+    r"\b(order|book|buy|purchase|shop for)\b.+\b(online|from|on|at)\b",
+    r"\b(order|book|buy|purchase)\b.+\b(pizza|food|ticket|flight|hotel|uber|lyft)\b",
 ]
 
 # Direct tool patterns -- skip mode classification entirely for unambiguous requests
@@ -88,8 +95,11 @@ DIRECT_TOOL_PATTERNS = [
     (re.compile(r"^(install|uninstall|update)\s+\w+$", re.I), "manage_software"),
     (re.compile(r"(move|copy|rename|delete|zip|find)\s+.*(file|folder|pdf|doc|screenshot|png|jpg|zip)", re.I), "manage_files"),
     (re.compile(r"(create|make|build|generate|write)\s+(a |an |me )?(simple |basic |beautiful )?(calculator|page|website|html|script|file|document|app|application|program|game|form|landing)", re.I), "create_file"),
-    (re.compile(r"(play|listen to)\s+(some |a |the |my )?(good |best |romantic |awesome |sad |soft |hard |classic )?(music|song|songs|track|tracks|playlist|album|rock|jazz|pop|blues|country|hip.?hop|rap|metal|classical|lo.?fi|chill|edm)", re.I), "play_music"),
-    (re.compile(r"(play|listen to)\s+.{1,50}\s+(on|in|using|with)\s+(spotify|youtube)", re.I), "play_music"),
+    # Generic music without specifying app — quick mode play_music handles media keys
+    # ^anchor ensures "open youtube and play jazz" doesn't match (→ agent mode instead)
+    (re.compile(r"^(play|listen to)\s+(some |a |the |my )?(good |best |romantic |awesome |sad |soft |hard |classic )?(music|song|songs|track|tracks|playlist|album|rock|jazz|pop|blues|country|hip.?hop|rap|metal|classical|lo.?fi|chill|edm)$", re.I), "play_music"),
+    # NOTE: "play X on spotify/youtube" intentionally NOT here — routed to agent mode
+    # for proper UI interaction (search → click result → verify playback)
     # Browser actions
     (re.compile(r"(go to|navigate to|open)\s+https?://", re.I), "browser_action"),
     (re.compile(r"(go to|navigate to|open)\s+www\.", re.I), "browser_action"),
@@ -162,8 +172,13 @@ def classify_mode(user_input, quick_chat_fn=None):
                     return _finish(ModeDecision("research", 0.85, f"research trigger: {pattern[:50]}"))
 
     # ---- SMART DECOMPOSITION: "X and Y" where both have dedicated tools ----
+    # BUT: "open spotify/youtube and play/search" → agent mode (needs UI interaction)
     compound = re.match(r"^(open|launch)\s+(\w+)\s+and\s+(play|search|find)\s+(.+)$", lower)
     if compound:
+        compound_app = compound.group(2).lower()
+        if compound_app in ("spotify", "youtube", "chrome", "firefox", "edge", "browser"):
+            logger.info(f"Smart decomposition: {compound_app} + interactive action -> agent mode")
+            return _finish(ModeDecision("agent", 0.9, f"smart decomposition: {compound_app} interactive"))
         logger.info("Smart decomposition: compound request with dedicated tools -> quick")
         return _finish(ModeDecision("quick", 0.9, "smart decomposition: compound request"))
 

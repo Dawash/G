@@ -201,12 +201,12 @@ def _handle_list_windows(arguments):
     return "\n".join(lines)
 
 
-def _handle_agent_task(arguments, action_registry, reminder_mgr=None, speak_fn=None):
+def _handle_agent_task(arguments, action_registry=None, reminder_mgr=None, speak_fn=None):
     """Launch autonomous desktop agent for multi-step tasks."""
     goal = arguments.get("goal", "")
     goal_lower = goal.lower()
 
-    # Smart pre-routing: Spotify music → search_in_app (faster)
+    # Spotify music → try search_in_app first, fall through to agent if no results
     if any(w in goal_lower for w in ["spotify", "play music", "play a song", "play song"]):
         music_query = "popular hits"
         for pattern in ["play (.+?) on spotify", "play (.+?) in spotify",
@@ -220,12 +220,16 @@ def _handle_agent_task(arguments, action_registry, reminder_mgr=None, speak_fn=N
                     music_query = extracted
                 break
         from computer import search_in_app
-        return search_in_app("Spotify", music_query)
+        result = search_in_app("Spotify", music_query)
+        # If search found results, return immediately; if no results, fall through to agent
+        if result and "no results" not in result.lower():
+            return result
+        # Fall through to full agent mode for retry with different approach
 
     # Bluetooth/WiFi toggle — open settings page first
     if any(w in goal_lower for w in ["bluetooth", "wifi", "wi-fi"]):
         setting = "bluetooth" if "bluetooth" in goal_lower else "wifi"
-        if "open_app" in action_registry:
+        if action_registry and "open_app" in action_registry:
             action_registry["open_app"](setting)
             import time as _time
             _time.sleep(2)

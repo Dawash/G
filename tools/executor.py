@@ -38,6 +38,9 @@ _HANDLER_TIMEOUTS = {
     "reason_deeply": 120,
     "spawn_agents": 120,
     "chain_tasks": 120,
+    "ask_user_choice": 120,
+    "ask_user_input": 120,
+    "ask_yes_no": 60,
 }
 
 # Tools that must run on the calling thread (e.g. pyautogui desktop automation).
@@ -49,6 +52,9 @@ _MAIN_THREAD_TOOLS = frozenset({
     "scroll",
     "take_screenshot",
     "find_on_screen",
+    "ask_user_choice",
+    "ask_user_input",
+    "ask_yes_no",
 })
 
 # Map legacy safety values to new levels

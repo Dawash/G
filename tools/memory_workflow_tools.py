@@ -43,7 +43,7 @@ def _handle_memory_control(arguments):
     return handle_memory_command(action, data, _memory_store, _preferences)
 
 
-def _handle_run_workflow(arguments, action_registry):
+def _handle_run_workflow(arguments, action_registry=None):
     from features.workflows.executor import execute_workflow
     if _workflow_registry is None:
         return "Workflow system not initialized."

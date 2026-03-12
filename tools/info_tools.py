@@ -22,8 +22,8 @@ def _handle_get_forecast(arguments):
     return get_forecast(city)
 
 
-def _handle_get_time(arguments, action_registry):
-    if "time" in action_registry:
+def _handle_get_time(arguments, action_registry=None):
+    if action_registry and "time" in action_registry:
         return action_registry["time"](None)
     from datetime import datetime
     return f"It's {datetime.now().strftime('%A, %I:%M %p')}."
@@ -37,10 +37,10 @@ def _handle_get_news(arguments):
     return get_briefing(category, query=query, country=country)
 
 
-def _handle_list_reminders(arguments, action_registry, reminder_mgr=None):
+def _handle_list_reminders(arguments, action_registry=None, reminder_mgr=None):
     if reminder_mgr:
         return reminder_mgr.list_active()
-    if "list_reminders" in action_registry:
+    if action_registry and "list_reminders" in action_registry:
         return action_registry["list_reminders"](None)
     try:
         from reminders import ReminderManager

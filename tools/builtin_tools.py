@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # Handler functions
 # ===================================================================
 
-def _handle_open_app(arguments, action_registry):
+def _handle_open_app(arguments, action_registry=None):
     """Open an application by name, with pronoun and category resolution."""
     name = arguments.get("name", "")
     if not isinstance(name, str):
@@ -57,33 +57,49 @@ def _handle_open_app(arguments, action_registry):
     except Exception:
         pass
 
-    if "open_app" not in action_registry:
+    if not action_registry or "open_app" not in action_registry:
         return f"Error: open_app not available in action registry."
     return action_registry["open_app"](name)
 
 
-def _handle_google_search(arguments, action_registry):
+def _handle_google_search(arguments, action_registry=None):
     """Search Google for a query."""
-    if "google_search" not in action_registry:
+    if not action_registry or "google_search" not in action_registry:
         return "Error: google_search not available in action registry."
     return action_registry["google_search"](arguments.get("query", ""))
 
 
 def _handle_get_weather(arguments):
-    """Get current weather, optionally for a specific city."""
+    """Get current weather or forecast, optionally for a specific city."""
     city = arguments.get("city", "") or None
+    # Check if the user is asking for a forecast (tomorrow, this week, etc.)
+    # The LLM sometimes sends forecast requests to get_weather since get_forecast
+    # isn't always available as a core tool for Ollama
+    try:
+        from brain import execute_tool
+        user_input = getattr(execute_tool, '_last_user_input', '') or ''
+    except Exception:
+        user_input = ''
+    _forecast_words = ("tomorrow", "forecast", "next week", "this week", "weekend",
+                       "will it rain", "will it snow", "next few days")
+    if any(w in user_input.lower() for w in _forecast_words):
+        try:
+            from weather import get_forecast
+            return get_forecast(city)
+        except Exception:
+            pass
     from weather import get_current_weather
     return get_current_weather(city)
 
 
-def _handle_set_reminder(arguments, action_registry, reminder_mgr=None):
+def _handle_set_reminder(arguments, action_registry=None, reminder_mgr=None):
     """Set a reminder with message and time."""
     msg = arguments.get("message", "")
     t = arguments.get("time", "in 1 hour")
     # Try direct reminder_mgr first (more reliable)
     if reminder_mgr:
         return reminder_mgr.add_reminder(msg, t)
-    if "set_reminder" in action_registry:
+    if action_registry and "set_reminder" in action_registry:
         return action_registry["set_reminder"](f"{msg}|{t}")
     # Last resort: try importing
     try:

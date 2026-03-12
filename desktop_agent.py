@@ -191,6 +191,17 @@ class DesktopAgent:
         except ImportError:
             pass
 
+    def _llm_timeout(self, base_timeout):
+        """Scale LLM timeout based on model size. Larger models need more time."""
+        model = (self.ollama_model or "").lower()
+        if any(s in model for s in ("72b", "70b")):
+            return max(base_timeout * 5, 120)
+        elif any(s in model for s in ("32b", "27b")):
+            return max(base_timeout * 3, 90)
+        elif any(s in model for s in ("14b", "13b")):
+            return max(base_timeout * 2, 45)
+        return base_timeout
+
     def cancel(self):
         """Signal the agent to stop at the next loop iteration."""
         self._cancelled = True
@@ -885,7 +896,7 @@ class DesktopAgent:
                         "stream": False,
                         "options": {"temperature": 0.4, "num_predict": 300},
                     },
-                    timeout=30,
+                    timeout=self._llm_timeout(30),
                 )
                 resp.raise_for_status()
                 content = resp.json()["message"]["content"]
@@ -1299,7 +1310,7 @@ class DesktopAgent:
                        for t, r, a in tools_used if t == "type_text")
         did_search = any("search" in r.lower()
                          for t, r, a in tools_used if t in ("search_in_app", "google_search"))
-        did_close = any("closed" in r.lower() or "not found" not in r.lower()
+        did_close = any("closed" in r.lower() and "error" not in r.lower() and "not found" not in r.lower()
                         for t, r, a in tools_used if t == "close_app")
         # "Play" requires: search in a music app + press_key (enter/play) to actually start
         # Just searching is NOT enough — we need to confirm playback started
@@ -1481,7 +1492,7 @@ class DesktopAgent:
                     "stream": False,
                     "options": {"temperature": 0.2, "num_predict": 300},
                 },
-                timeout=20,
+                timeout=self._llm_timeout(20),
             )
             resp.raise_for_status()
             content = resp.json()["message"]["content"]
@@ -1725,7 +1736,7 @@ class DesktopAgent:
                     "stream": False,
                     "options": {"temperature": 0.3, "num_predict": 300},
                 },
-                timeout=20,
+                timeout=self._llm_timeout(20),
             )
             resp.raise_for_status()
             content = resp.json()["message"]["content"]
@@ -2427,7 +2438,7 @@ class DesktopAgent:
             f'- fill_form: {{"fields": {{"username": "john", "password": "1234"}}}} — fill form fields by name\n'
             f'- ask_user_choice: {{"question": "Which one?", "options": ["A", "B", "C"]}} — ask user to pick from options\n'
             f'- ask_user_input: {{"question": "Enter your email:"}} — ask user for text input (sensitive=true for passwords)\n'
-            f'- ask_yes_no: {{"question": "Should I proceed?"}}} — ask yes/no question\n'
+            f'- ask_yes_no: {{"question": "Should I proceed?"}} — ask yes/no question\n'
             f"{self._get_openclaw_tools_prompt()}\n"
             f"USER INTERACTION RULES:\n"
             f"- When you see MULTIPLE OPTIONS on screen (accounts, items, varieties, search results),\n"
@@ -2503,7 +2514,7 @@ class DesktopAgent:
                     "stream": False,
                     "options": {"temperature": 0.3, "num_predict": 400},
                 },
-                timeout=30,
+                timeout=self._llm_timeout(30),
             )
             resp.raise_for_status()
             content = resp.json()["message"]["content"]
@@ -3097,7 +3108,7 @@ class DesktopAgent:
                     "stream": False,
                     "options": {"temperature": 0.1, "num_predict": 200},
                 },
-                timeout=15,
+                timeout=self._llm_timeout(15),
             )
             resp.raise_for_status()
             content = resp.json()["message"]["content"].strip()

@@ -317,6 +317,35 @@ def _click_first_spotify_song():
         return _click_first_spotify_song_keyboard()
 
 
+def _spotify_no_results():
+    """Check if Spotify search returned no results.
+
+    Looks for "No results found" or "Search for something else" in the
+    Spotify window UIA controls, which indicates the query had zero matches.
+    """
+    try:
+        from automation.ui_control import list_controls
+        controls = list_controls(window="Spotify", max_depth=6, max_count=80)
+        if controls:
+            for c in controls:
+                cname = (c.get("name") or "").lower()
+                if any(phrase in cname for phrase in (
+                    "no results found",
+                    "search for something else",
+                    "couldn't find",
+                    "no results",
+                    "not available",
+                )):
+                    logger.info(f"Spotify no-results detected: '{c.get('name')}'")
+                    return True
+    except Exception as e:
+        logger.debug(f"_spotify_no_results UIA check failed: {e}")
+
+    # Fallback: check window title hasn't changed (still "Spotify" = no song loaded)
+    # This alone isn't conclusive, so only return True if UIA found the indicator
+    return False
+
+
 def _click_first_spotify_song_keyboard():
     """Keyboard-only fallback for Spotify song selection."""
     try:
@@ -540,11 +569,18 @@ def search_in_app(app_name, query):
                 # Wait for search results to load
                 time.sleep(3.5)
                 try:
+                    # Check if search returned no results
+                    if "spotify" in name and _spotify_no_results():
+                        logger.info(f"Spotify search: no results for '{query}'")
+                        return f"No results found for '{query}' in {app_name}. Try a different search term."
                     # Click the first song in the search results
                     if _click_first_spotify_song():
                         logger.info(f"Protocol search + click-play for {app_name}: '{query}'")
                         return f"Playing '{query}' in {app_name}."
                     else:
+                        # Double-check: might be no results rather than click failure
+                        if "spotify" in name and _spotify_no_results():
+                            return f"No results found for '{query}' in {app_name}. Try a different search term."
                         logger.warning("Could not click first song, search completed but no auto-play")
                         return f"Searched for '{query}' in {app_name} (click a result to play)."
                 except Exception:

@@ -17,14 +17,14 @@ logger = logging.getLogger(__name__)
 # Handler functions
 # ===================================================================
 
-def _handle_close_app(arguments, action_registry):
-    if "close_app" not in action_registry:
+def _handle_close_app(arguments, action_registry=None):
+    if not action_registry or "close_app" not in action_registry:
         return "Error: close_app not available in action registry."
     return action_registry["close_app"](arguments.get("name", ""))
 
 
-def _handle_minimize_app(arguments, action_registry):
-    if "minimize_app" not in action_registry:
+def _handle_minimize_app(arguments, action_registry=None):
+    if not action_registry or "minimize_app" not in action_registry:
         return "Error: minimize_app not available in action registry."
     return action_registry["minimize_app"](arguments.get("name", ""))
 
@@ -36,7 +36,7 @@ def _handle_toggle_setting(arguments):
     return _toggle_system_setting(setting, state)
 
 
-def _handle_system_command(arguments, action_registry, user_input=""):
+def _handle_system_command(arguments, action_registry=None, user_input=""):
     cmd = arguments.get("command", "")
     valid_power_cmds = {"shutdown", "restart", "sleep", "cancel_shutdown"}
     if cmd not in valid_power_cmds:
@@ -52,6 +52,8 @@ def _handle_system_command(arguments, action_registry, user_input=""):
         if any(w in user_text for w in feature_words):
             logger.warning(f"Blocked misrouted {cmd} — user said: {user_text}")
             return f"I won't {cmd} — you asked about a feature, not the computer. Use agent_task instead."
+    if not action_registry:
+        return f"Error: system commands not available (no action registry)."
     if cmd in action_registry:
         return action_registry[cmd](None)
     return f"Unknown system command: {cmd}"

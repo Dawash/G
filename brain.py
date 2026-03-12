@@ -569,6 +569,10 @@ def execute_tool(tool_name, arguments, action_registry, reminder_mgr=None, speak
             pass
 
     # Verify tool completion — auto-escalate to agent if partial
+    # Check if Brain was cancelled before expensive verification
+    brain_ref = getattr(execute_tool, '_brain_ref', None)
+    if brain_ref and getattr(brain_ref, '_cancelled', False):
+        return result
     if tool_name in _VERIFY_TOOLS and result and "error" not in str(result).lower():
         user_input = getattr(execute_tool, '_last_user_input', '')
         is_complete, v_done, v_missing = _verify_tool_completion(
@@ -1211,6 +1215,9 @@ class Brain:
         Also handles compound requests (split-screen, parallel tasks).
         Returns result string, or None to fall through to LLM.
         """
+        if not user_input or not user_input.strip():
+            return None
+
         try:
             from execution_strategies import (
                 get_selector, detect_split_screen, execute_split_screen,
@@ -1590,6 +1597,10 @@ class Brain:
         # Reset tool blacklist for new request (EasyTool pattern)
         self._tool_blacklist = set()
 
+        # Skip brain entirely for empty input
+        if not user_input or not user_input.strip():
+            return None
+
         # Skip brain entirely if key is known-dead
         if self._key_dead:
             return None
@@ -1955,17 +1966,27 @@ class Brain:
 
     def _run_agent_mode(self, user_input):
         """Run autonomous agent. Tries CLI/API strategies first, then desktop agent."""
-        # Try fast strategies before expensive agent mode
-        try:
-            from execution_strategies import get_selector
-            selector = get_selector()
-            result, strategy = selector.execute_step(
-                user_input, action_registry=self.action_registry, skip_vision=True)
-            if result and strategy:
-                logger.info(f"Agent mode shortcut: {strategy} handled '{user_input[:40]}'")
-                return result
-        except Exception as e:
-            logger.debug(f"Strategy pre-check failed: {e}")
+        # Skip strategy shortcut for UI-interactive tasks — these need full agent
+        _ui_interactive = re.search(
+            r'\b(spotify|youtube)\b.*(play|search|find|watch|listen)|'
+            r'(play|search|find|watch|listen).*(spotify|youtube)\b|'
+            r'\b(order|book|buy|purchase)\b.*(online|pizza|food|ticket)',
+            user_input, re.I)
+
+        # Try fast strategies before expensive agent mode (non-UI tasks only)
+        if not _ui_interactive:
+            try:
+                from execution_strategies import get_selector
+                selector = get_selector()
+                result, strategy = selector.execute_step(
+                    user_input, action_registry=self.action_registry, skip_vision=True)
+                if result and strategy:
+                    logger.info(f"Agent mode shortcut: {strategy} handled '{user_input[:40]}'")
+                    return result
+            except Exception as e:
+                logger.debug(f"Strategy pre-check failed: {e}")
+        else:
+            logger.info(f"Agent mode: skipping strategy shortcut for UI task '{user_input[:40]}'")
 
         from orchestration.agent_runner import run_agent_mode
         return run_agent_mode(
@@ -2171,10 +2192,19 @@ class Brain:
         if self.provider_name != "ollama":
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        # Ollama: 60s for warm model, 120s for first-ever call (model loading)
-        # 30s was too short for code generation and complex reasoning tasks
+        # Ollama timeout: scale by model size (larger models need more time)
+        # First call includes model loading (~120s), warm calls scale by model
         if self.provider_name == "ollama":
-            timeout = (5, 120) if not hasattr(self, '_ollama_warmed') else (5, 60)
+            _model_lower = (self.ollama_model or "").lower()
+            if any(s in _model_lower for s in ("72b", "70b")):
+                _warm_timeout = 240  # 70B+ models: 4 min
+            elif any(s in _model_lower for s in ("32b", "27b")):
+                _warm_timeout = 150  # 32B models: 2.5 min
+            elif any(s in _model_lower for s in ("14b", "13b")):
+                _warm_timeout = 90   # 14B models: 1.5 min
+            else:
+                _warm_timeout = 60   # 7B and smaller: 1 min
+            timeout = (5, 180) if not hasattr(self, '_ollama_warmed') else (5, _warm_timeout)
             self._ollama_warmed = True
         else:
             timeout = 15
@@ -2346,7 +2376,7 @@ class Brain:
                     "prompt": "",
                     "keep_alive": -1,
                 },
-                timeout=120,
+                timeout=180,
             )
             self._ollama_warmed = True
             logger.info(f"Ollama {self.ollama_model} warm-up complete")
@@ -2389,6 +2419,16 @@ class Brain:
 
             if self.provider_name == "ollama":
                 # Use native Ollama endpoint (works on all versions)
+                # Timeout scales by model size (32b needs ~40s even for short responses)
+                _model_lower = (self.ollama_model or "").lower()
+                if any(s in _model_lower for s in ("72b", "70b")):
+                    _qc_timeout = 90
+                elif any(s in _model_lower for s in ("32b", "27b")):
+                    _qc_timeout = 60
+                elif any(s in _model_lower for s in ("14b", "13b")):
+                    _qc_timeout = 30
+                else:
+                    _qc_timeout = 15
                 resp = requests.post(
                     f"{self.ollama_url}/api/chat",
                     json={
@@ -2397,7 +2437,7 @@ class Brain:
                         "stream": False,
                         "options": {"num_predict": 100, "temperature": 0.8},
                     },
-                    timeout=10,
+                    timeout=_qc_timeout,
                 )
                 resp.raise_for_status()
                 content = resp.json()["message"]["content"]

@@ -352,7 +352,10 @@ def _keyword_detect(user_input):
     text = user_input.lower().strip()
 
     # Exit commands
-    if text in ("quit", "exit", "bye", "see ya", "goodbye", "stop"):
+    if text in ("quit", "exit", "bye", "see ya", "goodbye", "stop",
+                "good night", "goodnight", "turn off", "i'm done", "im done"):
+        return INTENT_QUIT, None
+    if re.search(r"\bsee you\b", text):
         return INTENT_QUIT, None
 
     # Connection control
@@ -362,23 +365,40 @@ def _keyword_detect(user_input):
         return INTENT_CONNECT, None
 
     # System commands (check before generic "open"/"close")
+    # Note: "shut down <app>" is close_app, not shutdown. Check for a trailing
+    # word that is NOT a system keyword (computer, pc, system, my computer).
     if "cancel shutdown" in text or "cancel restart" in text:
         return INTENT_CANCEL_SHUTDOWN, None
-    if "shut down" in text or "shutdown" in text:
-        return INTENT_SHUTDOWN, None
+    _shutdown_system_words = {"computer", "pc", "system", "my computer", "the computer", "this computer", ""}
+    shut_match = re.search(r"\b(?:shut\s*down|shutdown)\s*(.*?)$", text)
+    if shut_match:
+        shut_target = shut_match.group(1).strip().rstrip(".")
+        if shut_target in _shutdown_system_words:
+            return INTENT_SHUTDOWN, None
+        else:
+            # "shut down spotify" → close_app
+            return INTENT_CLOSE_APP, shut_target
     if "restart" in text or "reboot" in text:
         return INTENT_RESTART, None
     if text == "sleep" or "go to sleep" in text or "sleep mode" in text:
         return INTENT_SLEEP, None
 
-    # Reminders
-    if re.search(r"\bremind me\b|\bset a reminder\b|\breminder\b", text):
+    # Reminders (including alarm/alert synonyms)
+    if re.search(r"\bremind me\b|\bset a reminder\b|\breminder\b|\balert me\b|\bset (?:an? )?alarm\b|\balarm for\b", text):
         # Extract "remind me to X at Y" pattern
         match = re.search(r"remind me (?:to )?(.+?)(?:\s+(?:at|in|on|every)\s+(.+))?$", text)
         if match:
             message = match.group(1).strip()
             time_part = match.group(2) or ""
             return INTENT_SET_REMINDER, f"{message}|{time_part}".strip("|")
+        # "alert me in 10 minutes" pattern
+        alert_match = re.search(r"alert me\s+(.+?)$", text)
+        if alert_match:
+            return INTENT_SET_REMINDER, alert_match.group(1).strip()
+        # "set alarm for 7am" / "alarm for 6:30" pattern
+        alarm_match = re.search(r"alarm\s+(?:for\s+)?(.+?)$", text)
+        if alarm_match:
+            return INTENT_SET_REMINDER, alarm_match.group(1).strip()
         return INTENT_SET_REMINDER, text.replace("remind me", "").replace("set a reminder", "").strip()
 
     if re.search(r"\bmy reminders\b|\blist reminders\b|\bshow reminders\b|\bwhat reminders\b", text):
@@ -395,7 +415,7 @@ def _keyword_detect(user_input):
         return INTENT_SWITCH_PROVIDER, provider_match.group(1).lower()
 
     # News
-    if re.search(r"\bnews\b|\bheadlines\b|\bbriefing\b", text):
+    if re.search(r"\bnews\b|\bheadlines\b|\bbriefing\b|\bcurrent events\b|\bwhat happened today\b|\bwhat.s happening\b", text):
         category = "general"
         for cat in ("tech", "sports", "entertainment", "science", "business", "health"):
             if cat in text:
@@ -403,22 +423,38 @@ def _keyword_detect(user_input):
                 break
         return INTENT_NEWS, category
 
-    # Weather
-    if "forecast" in text:
+    # Weather & Forecast
+    # Forecast: future-oriented patterns (tomorrow, weekend, this week, "will it rain/snow")
+    if re.search(r"\bforecast\b|\b(?:tomorrow|weekend|next week|this week)\b.*\b(?:weather|rain|snow|cold|hot|warm)\b|\b(?:weather|rain|snow|cold|hot|warm)\b.*\b(?:tomorrow|weekend|next week|this week)\b", text):
         return INTENT_FORECAST, None
-    if "weather" in text:
+    if re.search(r"\bwill it (?:rain|snow)\b", text):
+        # "will it rain today" → weather, "will it rain tomorrow" → forecast
+        if re.search(r"\b(?:tomorrow|weekend|next week|this week)\b", text):
+            return INTENT_FORECAST, None
+        return INTENT_WEATHER, None
+    if re.search(r"\bweather\b|\bis it raining\b|\btemperature\s*(?:outside)?\b|\bhow (?:hot|cold|warm) is it\b|\bis it (?:cold|hot|warm|raining)\s*(?:outside)?\b", text):
         return INTENT_WEATHER, None
 
-    # Time
-    if re.search(r"\bwhat time\b|\bwhat.s the time\b|\btell me the time\b", text):
+    # Time / Date
+    if re.search(r"\bwhat time\b|\bwhat.s the time\b|\btell me the time\b|\bcurrent time\b|\btime please\b", text):
+        return INTENT_TIME, None
+    if re.search(r"\bwhat day is it\b|\bwhat.s today.s date\b|\bwhat is the date\b|\btoday.s date\b|\bwhat date is it\b", text):
         return INTENT_TIME, None
 
     # App control — check BEFORE search so "open X and search Y" works
-    open_match = re.search(r"\b(?:open|launch|start|run)\s+(\S+(?:\s+\S+)??)(?:\s+(?:and|then)\s+|\s+for me\s*$|\s*$)", text)
+    open_match = re.search(r"\b(?:open|launch|start|run|fire up)\s+(.+?)(?:\s+(?:and|then)\s+|\s+for me\s*$|\s*$)", text)
     if open_match:
         app = open_match.group(1).strip()
         for filler in ("please", "the", "app", "application", "program"):
-            app = app.replace(filler, "").strip()
+            app = re.sub(r'\b' + filler + r'\b', '', app).strip()
+        if app:
+            return INTENT_OPEN_APP, app
+    # "i need notepad", "get me spotify" — softer open synonyms
+    soft_open_match = re.search(r"\b(?:i need|get me)\s+(.+?)$", text)
+    if soft_open_match:
+        app = soft_open_match.group(1).strip()
+        for filler in ("please", "the", "app", "application", "program"):
+            app = re.sub(r'\b' + filler + r'\b', '', app).strip()
         if app:
             return INTENT_OPEN_APP, app
 
@@ -427,13 +463,13 @@ def _keyword_detect(user_input):
     if search_match:
         return INTENT_GOOGLE_SEARCH, search_match.group(1).strip()
 
-    close_match = re.search(r"\b(?:close|kill|end)\s+(.+?)(?:\s+for me)?$", text)
+    close_match = re.search(r"\b(?:close|kill|end|exit|quit|terminate|shut)\s+(.+?)(?:\s+for me)?$", text)
     if close_match:
         app = close_match.group(1).strip()
         if app:
             return INTENT_CLOSE_APP, app
 
-    minimize_match = re.search(r"\bminimize\s+(.+?)(?:\s+for me)?$", text)
+    minimize_match = re.search(r"\b(?:minimize|hide)\s+(.+?)(?:\s+for me)?$", text)
     if minimize_match:
         app = minimize_match.group(1).strip()
         if app:

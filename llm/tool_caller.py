@@ -124,6 +124,19 @@ def think_native(brain):
 
             # Plain text response — sanitize and return
             content = brain._sanitize_response(content)
+            if not content or not content.strip():
+                # LLM returned empty response — retry with quick_chat
+                logger.info("Native mode returned empty content, falling back to quick_chat")
+                try:
+                    user_msg = brain.messages[-1].get("content", "") if brain.messages else ""
+                    if user_msg:
+                        fallback = brain.quick_chat(user_msg)
+                        if fallback and len(fallback) > 2:
+                            brain.messages.append({"role": "assistant", "content": fallback})
+                            return fallback
+                except Exception:
+                    pass
+                return None
             brain.messages.append({"role": "assistant", "content": content})
             return content
 
