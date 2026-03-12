@@ -2197,14 +2197,14 @@ class Brain:
         if self.provider_name == "ollama":
             _model_lower = (self.ollama_model or "").lower()
             if any(s in _model_lower for s in ("72b", "70b")):
-                _warm_timeout = 240  # 70B+ models: 4 min
+                _warm_timeout = 300  # 70B+ models: 5 min
             elif any(s in _model_lower for s in ("32b", "27b")):
-                _warm_timeout = 150  # 32B models: 2.5 min
+                _warm_timeout = 200  # 32B models: 3.3 min
             elif any(s in _model_lower for s in ("14b", "13b")):
-                _warm_timeout = 90   # 14B models: 1.5 min
+                _warm_timeout = 120  # 14B models: 2 min
             else:
-                _warm_timeout = 60   # 7B and smaller: 1 min
-            timeout = (5, 180) if not hasattr(self, '_ollama_warmed') else (5, _warm_timeout)
+                _warm_timeout = 90   # 7B and smaller: 1.5 min
+            timeout = (5, 240) if not hasattr(self, '_ollama_warmed') else (5, _warm_timeout)
             self._ollama_warmed = True
         else:
             timeout = 15
