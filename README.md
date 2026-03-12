@@ -1,8 +1,8 @@
 # G - Personal AI Operating System
 
-A voice-first AI operating system for Windows that listens, understands, and acts. Built from scratch with 42,000+ lines of Python.
+A voice-first AI operating system for Windows that listens, understands, and acts. Built from scratch with 45,000+ lines of Python.
 
-G is your personal AI that controls your entire computer through natural voice commands. It opens apps, browses the web, plays music, manages files, automates desktop tasks, and has full conversations - all hands-free.
+G is your personal AI that controls your entire computer through natural voice commands. It opens apps, browses the web, plays music, manages files, automates desktop tasks, and has full conversations — all hands-free. Powered by local AI (Ollama) with no cloud dependency for core features.
 
 ## Demo
 
@@ -53,7 +53,7 @@ Every command is intelligently routed through the fastest possible path:
 | Vision | Screen analysis | "What's on my screen?" | 3-5s |
 
 ### LLM Brain (48 Tools)
-The AI brain powered by Ollama (local, free) with 15 core tools for the 7B model:
+The AI brain powered by Ollama (local, free) with smart model scaling — supports 7B to 70B+ models with automatic timeout and context window adjustment:
 
 - **App management** - Open, close, minimize, split-screen any application
 - **Web browsing** - Navigate websites, search, read web pages
@@ -81,9 +81,11 @@ For complex multi-step tasks, G plans and executes autonomously:
 Plan → Observe (screenshot) → Think → Act → Verify → Diagnose if failed
 ```
 
-- Silent execution - thinks in console, speaks only the result
+- **UI-interactive tasks** auto-route to agent mode (Spotify, YouTube, ordering, login flows)
+- Silent execution — thinks in console, speaks only the result
 - Self-healing with web research when stuck
 - Voyager-style skill library saves successful action sequences
+- Spotify/YouTube no-results detection and retry with different approach
 
 ### Persistent Memory
 - SQLite-backed long-term memory
@@ -113,11 +115,12 @@ python run.py
 The launcher automatically:
 1. Checks Python version
 2. Installs all dependencies
-3. Downloads and configures Ollama + qwen2.5:7b model
-4. Downloads Whisper STT model
-5. Downloads Piper TTS voice
-6. Prompts for your name and preferences
-7. Starts the assistant
+3. Prompts for your name and AI preferences
+4. Lets you choose Ollama model size (7B/14B/32B based on your RAM)
+5. Downloads chosen model + Whisper STT + Piper TTS
+6. Starts the assistant
+
+Type "back" at any prompt to go to the previous step.
 
 ### Manual Installation
 
@@ -132,11 +135,14 @@ python main.py
 ```
 
 ### First Run Setup
-On first run, G will ask you:
-1. **Your name** - Used for personalized greetings
-2. **AI name** - What you want to call your AI (default: "G")
-3. **AI provider** - Ollama (local, free), OpenAI, Anthropic, or OpenRouter
-4. **API key** - Only needed for cloud providers (encrypted on disk)
+On first run, G walks you through an interactive wizard:
+1. **Your name** — Used for personalized greetings
+2. **AI name** — What you want to call your AI (default: "G")
+3. **AI provider** — Ollama (local, free), OpenAI, Anthropic, or OpenRouter
+4. **Model selection** — Choose model size based on your RAM (7B/14B/32B/72B)
+5. **API key** — Only needed for cloud providers (encrypted on disk)
+
+You can type "back" at any step to go back and change your choice.
 
 ## Configuration
 
@@ -156,7 +162,7 @@ Settings are stored in `config.json` (auto-generated, never committed):
 
 | Provider | Model | Cost | Setup |
 |----------|-------|------|-------|
-| **Ollama** (default) | qwen2.5:7b | Free (local) | `ollama pull qwen2.5:7b` |
+| **Ollama** (default) | qwen2.5:7b-32b | Free (local) | Auto-selected by RAM |
 | OpenAI | gpt-4o-mini | Pay per use | API key |
 | Anthropic | Claude Sonnet | Pay per use | API key |
 | OpenRouter | Any model | Pay per use | API key |
@@ -218,8 +224,9 @@ python run.py
 
 ### Tutorial 3: Music Control
 ```
-"Play a good song"              → Plays popular music on Spotify
-"Play Shape of You"             → Plays specific song
+"Play some jazz"                → Plays music via media keys
+"Play Shape of You on Spotify"  → Opens Spotify, searches, clicks result (agent mode)
+"Search for lo-fi on YouTube"   → Opens YouTube, searches, plays first video
 "Pause the music"               → Pauses playback
 "Next song"                     → Skips to next track
 ```
@@ -261,7 +268,21 @@ python run.py
 → Chains: launch both → snap to left/right halves
 ```
 
-### Tutorial 8: Multilingual
+### Tutorial 8: Agent Mode (Complex Tasks)
+```
+"Order me a pizza from Domino's"
+→ G launches browser, navigates to Domino's, asks you what to order
+
+"Log into Gmail and send an email to John"
+→ G opens Gmail, asks for your credentials, composes email
+
+"Book a flight to Tokyo"
+→ G searches for flights, presents options, asks you to choose
+```
+
+Agent mode uses vision (screenshots) to understand the screen and makes decisions about what to click, type, or do next. It asks for user input when needed (login, choices, etc.) instead of guessing.
+
+### Tutorial 9: Multilingual
 ```
 "Introduce yourself in Nepali"
 → Responds in Nepali with proper Devanagari script + gTTS voice
@@ -322,7 +343,7 @@ G/
 | **VAD** | Silero VAD |
 | **TTS (English)** | Piper (neural, offline) |
 | **TTS (Other)** | gTTS (30+ languages) |
-| **LLM** | Ollama (qwen2.5:7b, local) |
+| **LLM** | Ollama (qwen2.5 7B-72B, local) |
 | **Vision** | llava (screen understanding) |
 | **Browser** | Chrome DevTools Protocol |
 | **UI Automation** | pywinauto + pyautogui |
@@ -334,7 +355,7 @@ G/
 - Windows 10/11
 - Python 3.12+
 - Microphone + speakers
-- ~4GB RAM for Ollama model
+- ~8GB RAM minimum (16GB+ recommended for 14B/32B models)
 - GPU recommended (CUDA) for Whisper acceleration
 - Internet for weather, news, web features (core works offline)
 
