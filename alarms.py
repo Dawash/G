@@ -288,25 +288,44 @@ class AlarmManager:
 
     def _fire_alarm(self, alarm):
         """Fire an alarm: play sound, wait for voice dismiss, then briefing."""
-        logger.info(f"Firing alarm: {alarm.label} ({alarm.alarm_type})")
-        print(f"\n{'='*50}")
-        print(f"  ALARM: {alarm.label}")
-        print(f"{'='*50}")
+        try:
+            logger.info(f"Firing alarm: {alarm.label} ({alarm.alarm_type})")
+            print(f"\n{'='*50}")
+            print(f"  ALARM: {alarm.label}")
+            print(f"{'='*50}")
 
-        self._alarm_playing = True
-        self._stop_alarm.clear()
-        self._current_alarm = alarm
+            self._alarm_playing = True
+            self._stop_alarm.clear()
+            self._current_alarm = alarm
 
-        # Play alarm sound in loop until dismissed
-        sound_thread = threading.Thread(
-            target=self._play_alarm_sound, args=(alarm,), daemon=True
-        )
-        sound_thread.start()
+            # Suppress mic listening while alarm plays (prevents false triggers)
+            try:
+                from speech import set_audio_playing
+                set_audio_playing(True)
+            except ImportError:
+                pass
 
-        # Wait for voice dismissal (max 5 minutes, then auto-stop)
-        self._stop_alarm.wait(timeout=300)
-        self._alarm_playing = False
-        self._current_alarm = None
+            # Play alarm sound in loop until dismissed
+            sound_thread = threading.Thread(
+                target=self._play_alarm_sound, args=(alarm,), daemon=True
+            )
+            sound_thread.start()
+
+            # Wait for voice dismissal (max 5 minutes, then auto-stop)
+            self._stop_alarm.wait(timeout=300)
+
+        except Exception as e:
+            logger.error(f"Alarm fire error: {e}", exc_info=True)
+        finally:
+            self._alarm_playing = False
+            self._current_alarm = None
+
+            # Re-enable mic listening
+            try:
+                from speech import set_audio_playing
+                set_audio_playing(False)
+            except ImportError:
+                pass
 
         # Deactivate one-time alarms
         if alarm.recurrence == "once":
@@ -320,39 +339,42 @@ class AlarmManager:
 
     def _play_alarm_sound(self, alarm):
         """Play alarm sound repeatedly until stopped."""
-        # Determine sound file
-        sound = alarm.sound_file
-        if not sound or not os.path.isfile(sound):
-            if alarm.alarm_type == "morning" and os.path.isfile(MORNING_SOUND):
-                sound = MORNING_SOUND
-            elif os.path.isfile(DEFAULT_ALARM_SOUND):
-                sound = DEFAULT_ALARM_SOUND
-            else:
-                sound = None
-
-        while not self._stop_alarm.is_set():
-            try:
-                if sound and os.path.isfile(sound):
-                    # Play .wav file
-                    winsound.PlaySound(sound, winsound.SND_FILENAME | winsound.SND_ASYNC)
-                else:
-                    # Fallback: Windows system beep pattern
-                    for freq in [800, 1000, 800, 1000, 1200]:
-                        if self._stop_alarm.is_set():
-                            break
-                        winsound.Beep(freq, 300)
-                        time.sleep(0.1)
-                # Wait between repeats
-                self._stop_alarm.wait(timeout=3)
-            except Exception as e:
-                logger.debug(f"Alarm sound error: {e}")
-                time.sleep(2)
-
-        # Stop any playing sound
         try:
-            winsound.PlaySound(None, winsound.SND_PURGE)
-        except Exception:
-            pass
+            # Determine sound file
+            sound = alarm.sound_file
+            if not sound or not os.path.isfile(sound):
+                if alarm.alarm_type == "morning" and os.path.isfile(MORNING_SOUND):
+                    sound = MORNING_SOUND
+                elif os.path.isfile(DEFAULT_ALARM_SOUND):
+                    sound = DEFAULT_ALARM_SOUND
+                else:
+                    sound = None
+
+            while not self._stop_alarm.is_set():
+                try:
+                    if sound and os.path.isfile(sound):
+                        # Play .wav file
+                        winsound.PlaySound(sound, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                    else:
+                        # Fallback: Windows system beep pattern
+                        for freq in [800, 1000, 800, 1000, 1200]:
+                            if self._stop_alarm.is_set():
+                                break
+                            winsound.Beep(freq, 300)
+                            time.sleep(0.1)
+                    # Wait between repeats
+                    self._stop_alarm.wait(timeout=3)
+                except Exception as e:
+                    logger.debug(f"Alarm sound error: {e}")
+                    time.sleep(2)
+        except Exception as e:
+            logger.error(f"Alarm sound thread error: {e}")
+        finally:
+            # Stop any playing sound
+            try:
+                winsound.PlaySound(None, winsound.SND_PURGE)
+            except Exception:
+                pass
 
     def dismiss_alarm(self, snooze_minutes=0):
         """Dismiss the currently ringing alarm. Called from voice input.
@@ -369,6 +391,19 @@ class AlarmManager:
         self._alarm_playing = False
         self._current_alarm = None
         self._stop_alarm.set()
+
+        # Stop alarm sound immediately so TTS response is audible
+        try:
+            winsound.PlaySound(None, winsound.SND_PURGE)
+        except Exception:
+            pass
+
+        # Re-enable mic listening (alarm audio stopped)
+        try:
+            from speech import set_audio_playing
+            set_audio_playing(False)
+        except ImportError:
+            pass
 
         if snooze_minutes > 0 and alarm:
             # Reschedule for snooze

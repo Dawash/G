@@ -54,6 +54,14 @@ _stop_speaking = threading.Event()
 # Suppress listening during own TTS playback (prevents echo pickup)
 _is_speaking = threading.Event()
 
+# Global audio flag — set when ANY audio output is playing (TTS, alarm, music)
+# Listening code checks this to avoid picking up system audio as speech
+_audio_playing = threading.Event()
+
+# Post-TTS cooldown duration (seconds) — ignore mic input after TTS ends
+# Prevents "Going to sleep. Say Hey G to wake me." from triggering wake word
+_POST_TTS_COOLDOWN_S = 2.0
+
 # Echo detection: track last spoken text to filter self-hearing
 _last_spoken_text = ""
 _speak_end_time = 0.0
@@ -78,6 +86,23 @@ def set_mic_state(state):
     global _mic_state
     with _mic_state_lock:
         _mic_state = state
+
+
+def set_audio_playing(playing=True):
+    """Signal that external audio is being output (alarm, music, etc.).
+
+    While set, listening functions skip mic processing to avoid
+    picking up system audio as user speech.
+    """
+    if playing:
+        _audio_playing.set()
+    else:
+        _audio_playing.clear()
+
+
+def is_audio_playing():
+    """Check if any audio output is active (TTS, alarm, music)."""
+    return _audio_playing.is_set() or _is_speaking.is_set()
 
 
 # ===================================================================
@@ -126,6 +151,19 @@ def listen_for_wake_word(timeout_s=None):
         if timeout_s and (time.time() - start) > timeout_s:
             set_mic_state("IDLE")
             return None
+
+        # Skip listening while system audio is playing (TTS, alarm, music)
+        if _is_speaking.is_set() or _audio_playing.is_set():
+            time.sleep(0.3)
+            continue
+
+        # Post-TTS cooldown: reject wake words shortly after TTS ends
+        # Prevents "Say Hey G to wake me" from triggering a false wake
+        with _echo_lock:
+            _time_since_tts = time.time() - _speak_end_time
+        if _time_since_tts < _POST_TTS_COOLDOWN_S:
+            time.sleep(0.2)
+            continue
 
         # Use VAD with short max speech (2s for wake words)
         vad = _get_vad_model()
@@ -270,6 +308,10 @@ _MIC_RECOVERY_MAX_RETRIES = 3
 
 def _listen_vad_short(max_speech_s=2.0, wait_timeout_s=5.0):
     """Short VAD listen for wake word detection. Returns WAV path or None."""
+    # Don't listen while system audio is playing
+    if _is_speaking.is_set() or _audio_playing.is_set():
+        return None
+
     vad = _get_vad_model()
     if vad is None:
         return None
@@ -463,6 +505,10 @@ def _listen_with_vad():
     Listen via microphone using Silero VAD for precise speech boundary detection.
     Returns path to temp WAV file containing speech, or None if no speech detected.
     """
+    # Don't listen while system audio is playing
+    if _is_speaking.is_set() or _audio_playing.is_set():
+        return None
+
     vad = _get_vad_model()
     if vad is None:
         return None  # Caller should fall back to sr.Recognizer.listen()
@@ -773,6 +819,16 @@ def _listen_whisper():
     Returns text and updates _detected_language.
     """
     global _calibrated, _detected_language
+
+    # Don't listen while system audio is playing (TTS, alarm, music)
+    if _is_speaking.is_set() or _audio_playing.is_set():
+        return None
+
+    # Post-TTS cooldown
+    with _echo_lock:
+        _time_since_tts = time.time() - _speak_end_time
+    if _time_since_tts < _POST_TTS_COOLDOWN_S:
+        return None
 
     model = _get_whisper_model()
     if model is None:
@@ -1385,8 +1441,9 @@ def speak(text):
         _is_speaking.clear()
         with _echo_lock:
             _speak_end_time = time.time()  # Silence buffer: track when TTS finished
-        # 500ms silence buffer before resuming listen — prevents mic picking up tail-end of TTS
-        time.sleep(0.5)
+        # Post-TTS cooldown — prevents mic picking up tail-end of TTS
+        # Also prevents "Say Hey G to wake me" from triggering false wake
+        time.sleep(_POST_TTS_COOLDOWN_S)
         set_mic_state("IDLE")
 
 
