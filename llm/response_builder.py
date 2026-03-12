@@ -20,6 +20,14 @@ def sanitize_response(text):
     """Remove LLM artifacts (special tokens, leftover JSON) from spoken text."""
     if not text:
         return text
+    # Strip problematic Unicode characters that crash Windows console encoding
+    # Zero-width spaces, non-breaking spaces, RTL/LTR marks, etc.
+    text = re.sub(r'[\u200b\u200c\u200d\u200e\u200f\ufeff\u00ad\u2028\u2029]', '', text)
+    # Replace Unicode arrows/dashes with ASCII equivalents
+    text = text.replace('\u2192', '->').replace('\u2190', '<-')
+    text = text.replace('\u2014', '-').replace('\u2013', '-')
+    text = text.replace('\u2018', "'").replace('\u2019', "'")
+    text = text.replace('\u201c', '"').replace('\u201d', '"')
     # Remove llama special tokens
     text = re.sub(r'<\|.*?\|>', '', text)
     # Remove markdown code fences that leaked
@@ -40,9 +48,12 @@ def sanitize_response(text):
     text = re.sub(r'\\text\{([^}]*)\}', r'\1', text)
     # Remove remaining LaTeX backslash commands (\times, \approx, etc.)
     text = re.sub(r'\\(times|approx|cdot|div|frac|sqrt|pm|mp|leq|geq|neq)', lambda m: {
-        'times': '×', 'approx': '≈', 'cdot': '·', 'div': '÷',
-        'sqrt': '√', 'pm': '±', 'leq': '≤', 'geq': '≥', 'neq': '≠',
+        'times': 'x', 'approx': '~', 'cdot': '.', 'div': '/',
+        'sqrt': 'sqrt', 'pm': '+/-', 'leq': '<=', 'geq': '>=', 'neq': '!=',
     }.get(m.group(1), m.group(1)), text)
+    # Final safety: strip invisible/control characters that crash Windows console
+    # Keep visible Unicode (Nepali, Japanese, etc.) but remove zero-width and control chars
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', text)
     return text.strip()
 
 

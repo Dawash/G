@@ -443,12 +443,16 @@ def launch_app(app_name):
     if name_lower in DIRECT_EXE_APPS:
         exe = DIRECT_EXE_APPS[name_lower]
         try:
-            CREATE_NEW_PROCESS_GROUP = 0x00000200
-            DETACHED_PROCESS = 0x00000008
-            subprocess.Popen(
-                [exe], creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
-                close_fds=True,
-            )
+            # .msc files need os.startfile() or mmc.exe, not subprocess.Popen
+            if exe.endswith('.msc'):
+                os.startfile(exe)
+            else:
+                CREATE_NEW_PROCESS_GROUP = 0x00000200
+                DETACHED_PROCESS = 0x00000008
+                subprocess.Popen(
+                    [exe], creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+                    close_fds=True,
+                )
             logger.info(f"Launched direct exe '{name_lower}' -> {exe}")
             _activate_app_window(app_name, name_lower)
             return f"Sure, I've opened {app_name} for you."

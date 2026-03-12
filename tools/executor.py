@@ -322,6 +322,11 @@ class ToolExecutor:
             self._log_learning(user_input, tool_name, arguments, result,
                                cognition, experience_learner)
 
+        # Sanitize result to prevent Unicode crashes on Windows console
+        if isinstance(result, str):
+            import re as _re
+            result = _re.sub(r'[\u200b\u200c\u200d\u200e\u200f\ufeff\u00ad]', '', result)
+
         return result
 
     def _call_handler(self, spec, arguments, action_registry,
