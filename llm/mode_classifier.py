@@ -101,6 +101,8 @@ DIRECT_TOOL_PATTERNS = [
     (re.compile(r"^(play|listen to)\s+(some |a |the |my )?(good |best |romantic |awesome |sad |soft |hard |classic )?(music|song|songs|track|tracks|playlist|album|rock|jazz|pop|blues|country|hip.?hop|rap|metal|classical|lo.?fi|chill|edm)$", re.I), "play_music"),
     # NOTE: "play X on spotify/youtube" intentionally NOT here — routed to agent mode
     # for proper UI interaction (search → click result → verify playback)
+    # Screenshot
+    (re.compile(r"(take|capture|grab|save)\s+(a\s+)?screenshot", re.I), "take_screenshot"),
     # Browser actions
     (re.compile(r"(go to|navigate to|open)\s+https?://", re.I), "browser_action"),
     (re.compile(r"(go to|navigate to|open)\s+www\.", re.I), "browser_action"),

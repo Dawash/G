@@ -918,14 +918,16 @@ def detect_parallel_tasks(text):
     """
     lower = text.lower().strip()
 
-    # "open X, Y, and Z"
-    m = re.match(r"^(?:open|launch|start)\s+(.+)$", lower)
-    if m:
-        rest = m.group(1)
-        # Split by "and" / "," combinations
-        parts = re.split(r"\s*,\s*(?:and\s+)?|\s+and\s+", rest)
-        if len(parts) >= 2:
-            return [f"open {p.strip()}" for p in parts if p.strip()]
+    # "open X, Y, and Z" — but NOT "open X and go to/search/navigate/play"
+    # Those are sequential compound intents, not parallel.
+    if not re.search(r"\band\s+(?:go\s+to|navigate|search|play|find|type|click|fill)", lower):
+        m = re.match(r"^(?:open|launch|start)\s+(.+)$", lower)
+        if m:
+            rest = m.group(1)
+            # Split by "and" / "," combinations
+            parts = re.split(r"\s*,\s*(?:and\s+)?|\s+and\s+", rest)
+            if len(parts) >= 2:
+                return [f"open {p.strip()}" for p in parts if p.strip()]
 
     # "close X, Y, and Z"
     m = re.match(r"^(?:close|quit|exit)\s+(.+)$", lower)
