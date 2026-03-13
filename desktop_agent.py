@@ -788,12 +788,26 @@ class DesktopAgent:
         _log_agent_action("start_goal", goal)
 
         try:
+            # Start PopupGuardian to handle unexpected dialogs during execution
+            _popup_guardian = None
+            try:
+                from agents.popup_guardian import PopupGuardian
+                _popup_guardian = PopupGuardian(
+                    speak_fn=getattr(self, 'speak_fn', None),
+                    goal=goal,
+                )
+                _popup_guardian.start()
+            except Exception as e:
+                logger.debug(f"PopupGuardian not available: {e}")
+
             # Minimize our own terminal so it doesn't confuse vision
             self._minimize_own_terminal()
 
             # Check if this is a multi-part goal we should split into sub-agents
             subtasks = self._detect_parallel_subtasks(goal)
             if subtasks and len(subtasks) > 1:
+                if _popup_guardian:
+                    _popup_guardian.stop()
                 return self._execute_parallel(subtasks, goal)
 
             # ===== PHASE 1: RECON =====
@@ -821,6 +835,15 @@ class DesktopAgent:
             self._phase = PHASE_VERIFY
             return self._phase_verify(goal, exec_result)
         finally:
+            # Stop PopupGuardian
+            if _popup_guardian:
+                try:
+                    dismissed = _popup_guardian.get_dismissed()
+                    _popup_guardian.stop()
+                    if dismissed:
+                        logger.info(f"PopupGuardian handled {len(dismissed)} popups: {dismissed}")
+                except Exception:
+                    pass
             DesktopAgent._active_instance = None
 
     # ==================================================================

@@ -396,19 +396,22 @@ def validate_tool_choice(tool_name, user_input):
     _CLEAR_PATTERNS = [
         (r"\b(toggle|turn on|turn off|switch on|switch off|enable|disable)\b"
          r".*(mode|light|wifi|wi-fi|bluetooth|setting|airplane|dark|night)",
-         "toggle_setting"),
+         "toggle_setting",
+         {"send_email", "create_file", "system_command", "get_weather",
+          "get_time", "get_news", "web_read", "web_search_answer", "open_app"}),
         (r"\b(play|listen to)\b"
          r".*(music|song|jazz|rock|classical|pop|hip.hop|spotify|playlist)",
-         "play_music"),
-        (r"\bopen\b\s+\w+", "open_app"),
+         "play_music",
+         {"send_email", "create_file", "system_command", "get_weather",
+          "get_time", "get_news", "web_read", "web_search_answer", "open_app"}),
+        # open_app: only override non-info tools (never override get_weather/get_news/etc.)
+        (r"^(?:open|launch|start)\s+(?:the\s+)?(?:my\s+)?\w+",
+         "open_app",
+         {"send_email", "create_file", "system_command"}),
     ]
-    mismatch_targets = {
-        "send_email", "create_file", "system_command", "get_weather",
-        "get_time", "get_news", "web_read", "web_search_answer",
-    }
-    for pattern, expected in _CLEAR_PATTERNS:
+    for pattern, expected, targets in _CLEAR_PATTERNS:
         if re.search(pattern, lower) and tool_name != expected:
-            if tool_name in mismatch_targets:
+            if tool_name in targets:
                 logger.warning(
                     f"Tool mismatch: LLM chose {tool_name} but "
                     f"'{lower}' clearly needs {expected} -- overriding")

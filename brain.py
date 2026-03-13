@@ -1481,26 +1481,61 @@ class Brain:
             except Exception:
                 pass
 
-        # --- Math fast-path: "what is 2+2", "calculate 5*3", "2+2" ---
-        _math_match = _re.search(
-            r'(?:what\s+is\s+|calculate\s+|solve\s+|compute\s+)?'
-            r'(\d+(?:\.\d+)?)\s*([+\-*/^%])\s*(\d+(?:\.\d+)?)',
+        # --- Math fast-path: "what is 2+2", "25 * 4 + 10", "sqrt(144)" ---
+        _math_expr = _re.search(
+            r'(?:what\s+is\s+|calculate\s+|solve\s+|compute\s+|what\'s\s+)?'
+            r'([\d\.\s+\-*/^%()]+(?:\s*[\d\.\s+\-*/^%()]+)*)',
             _ui_lower
         )
-        if _math_match:
-            try:
-                a, op, b = _math_match.group(1), _math_match.group(2), _math_match.group(3)
-                a, b = float(a), float(b)
-                ops = {'+': a+b, '-': a-b, '*': a*b, '/': a/b if b else 0,
-                       '^': a**b, '%': a%b if b else 0}
-                answer = ops.get(op)
-                if answer is not None:
-                    # Format: remove trailing .0 for clean integers
-                    ans_str = f"{answer:g}"
-                    logger.info(f"Direct dispatch: math fast-path ({a:g} {op} {b:g} = {ans_str})")
-                    return f"{a:g} {op} {b:g} = {ans_str}"
-            except Exception:
-                pass
+        if _math_match := _math_expr:
+            expr = _math_match.group(1).strip()
+            # Only proceed if it looks like actual math (has digits and operators)
+            if _re.search(r'\d', expr) and _re.search(r'[+\-*/^%]', expr) and len(expr) >= 3:
+                try:
+                    # Sanitize: only allow digits, operators, parens, spaces, dots
+                    safe_expr = expr.replace('^', '**')
+                    if _re.match(r'^[\d\s+\-*/.()]+$', safe_expr):
+                        answer = eval(safe_expr)  # Safe: only math chars allowed
+                        ans_str = f"{answer:g}" if isinstance(answer, float) else str(answer)
+                        logger.info(f"Direct dispatch: math fast-path ({expr} = {ans_str})")
+                        return f"{expr} = {ans_str}"
+                except Exception:
+                    pass
+
+        # --- Unit conversion fast-path: "convert 100 fahrenheit to celsius" ---
+        _conv_match = _re.search(
+            r'(?:convert\s+)?(\d+(?:\.\d+)?)\s*(?:degrees?\s+)?'
+            r'(fahrenheit|celsius|f|c|km|miles?|kg|pounds?|lbs?|meters?|feet|ft|inches?|cm)'
+            r'\s+(?:to|in)\s+'
+            r'(fahrenheit|celsius|f|c|km|miles?|kg|pounds?|lbs?|meters?|feet|ft|inches?|cm)',
+            _ui_lower
+        )
+        if _conv_match:
+            val = float(_conv_match.group(1))
+            src = _conv_match.group(2).rstrip('s')
+            dst = _conv_match.group(3).rstrip('s')
+            conversions = {
+                ('fahrenheit', 'celsius'): lambda v: (v - 32) * 5/9,
+                ('f', 'c'): lambda v: (v - 32) * 5/9,
+                ('celsius', 'fahrenheit'): lambda v: v * 9/5 + 32,
+                ('c', 'f'): lambda v: v * 9/5 + 32,
+                ('km', 'mile'): lambda v: v * 0.621371,
+                ('mile', 'km'): lambda v: v * 1.60934,
+                ('kg', 'pound'): lambda v: v * 2.20462,
+                ('pound', 'kg'): lambda v: v * 0.453592,
+                ('lb', 'kg'): lambda v: v * 0.453592,
+                ('meter', 'feet'): lambda v: v * 3.28084,
+                ('meter', 'ft'): lambda v: v * 3.28084,
+                ('feet', 'meter'): lambda v: v * 0.3048,
+                ('ft', 'meter'): lambda v: v * 0.3048,
+                ('inch', 'cm'): lambda v: v * 2.54,
+                ('cm', 'inch'): lambda v: v / 2.54,
+            }
+            fn = conversions.get((src, dst))
+            if fn:
+                result_val = fn(val)
+                logger.info(f"Direct dispatch: conversion fast-path ({val} {src} → {result_val:.2f} {dst})")
+                return f"{val:g} {src} = {result_val:.2f} {dst}"
 
         # --- StrategySelector: tries CLI → API → WEBSITE → TOOL → UIA → CDP ---
         selector = get_selector()
