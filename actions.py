@@ -46,13 +46,22 @@ def minimize_window(title):
 
 
 def close_window(title):
-    """Close windows matching the given title."""
+    """Close windows matching the given title, with event-driven verification."""
     try:
         windows = gw.getWindowsWithTitle(title)
         if windows:
             for w in windows:
                 w.close()
-            return f"Done, I've closed {title}."
+            # Verify window actually closed instead of assuming
+            try:
+                from automation.event_waiter import wait_for_window_gone
+                result = wait_for_window_gone(title, max_wait=5, interval=0.2)
+                if result["gone"]:
+                    return f"Done, I've closed {title}."
+                else:
+                    return f"I sent the close signal to {title}, but it may still be open (save dialog?)."
+            except ImportError:
+                return f"Done, I've closed {title}."
         return f"I couldn't find a window called {title}. Is it running?"
     except Exception as e:
         logging.error(f"Error closing window: {e}")

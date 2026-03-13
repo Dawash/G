@@ -566,8 +566,14 @@ def search_in_app(app_name, query):
             uri = uri_template.replace("{q}", quote(query))
             try:
                 os.startfile(uri)
-                # Wait for search results to load
-                time.sleep(3.5)
+                # Event-driven wait: poll for Spotify window + search results
+                try:
+                    from automation.event_waiter import wait_for_window
+                    wait_for_window("Spotify", max_wait=5, interval=0.2)
+                    # Give Spotify a moment to render search results after window appears
+                    time.sleep(0.5)
+                except ImportError:
+                    time.sleep(3.5)
                 try:
                     # Check if search returned no results
                     if "spotify" in name and _spotify_no_results():

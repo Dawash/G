@@ -21,7 +21,6 @@ Ollama support:
   - Auto-detects which mode works and remembers it
 """
 
-import ast
 import json
 import logging
 import os
@@ -51,8 +50,7 @@ from brain_defs import (
 )
 
 # Extracted modules (Phase 4)
-from llm.mode_classifier import classify_mode as _classify_mode_fn, ModeDecision
-from llm.context_manager import ContextManager as _ContextManager
+from llm.mode_classifier import classify_mode as _classify_mode_fn
 from llm.response_builder import (
     sanitize_response as _sanitize_response_fn,
     is_llm_refusal as _is_llm_refusal_fn,
@@ -1342,6 +1340,7 @@ class Brain:
         _no_tool_needed = (
             _re.search(r'^(?:what\'?s?|who\'?s?|where|when|why|how|explain|tell me|define|describe|translate|say|calculate|solve|give me|list|name|can you)\b', user_input, _re.I)
             and not _re.search(r'\b(open|close|launch|install|set|create|send|search for|files?|apps?|download|reminders?|weather|forecast|news|screenshots?|alarms?|emails?|desktop|windows?|click|type|tabs?|processes?|battery|wifi|network)\b', user_input, _re.I)
+            and not _re.search(r'\b(what|the) (time|date)\b', user_input, _re.I)
             # Allow knowledge about tech topics (RAM, CPU, etc.) — only block system queries
             and not _re.search(r'\b(my |check |how much |what\'?s? my )(ram|cpu|disk|time)\b', user_input, _re.I)
         )
@@ -1590,8 +1589,6 @@ class Brain:
         None means the caller should use keyword fallback.
         """
         from ai_providers import is_rate_limited, _record_rate_limit, _clear_rate_limit
-
-        import time as _time_mod
 
         # Reset cancellation flag at start of each think() call
         self._cancelled = False

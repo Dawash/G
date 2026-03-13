@@ -21,9 +21,7 @@ Usage:
 """
 
 import logging
-import os
 import re
-import time
 
 logger = logging.getLogger(__name__)
 

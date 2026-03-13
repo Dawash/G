@@ -9,7 +9,6 @@ can handle the task.
 
 import logging
 import time
-from dataclasses import dataclass, field
 
 from automation.executors.base import ActionSpec, ActionResult
 from automation.observers.windows_observer import WindowsObserver

@@ -18,7 +18,7 @@ Future: BrainService will absorb more of Brain's think() pipeline
 import logging
 
 from llm.context_manager import ContextManager
-from llm.mode_classifier import classify_mode, ModeDecision
+from llm.mode_classifier import classify_mode
 from llm.response_builder import sanitize_response, is_llm_refusal, suggest_tool_for_retry
 from llm.prompt_builder import build_brain_system_prompt, build_prompt_system
 

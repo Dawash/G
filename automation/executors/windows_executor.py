@@ -7,7 +7,7 @@ and returns ActionResult with verification.
 import logging
 import time
 
-from automation.executors.base import ActionResult, _timed_exec
+from automation.executors.base import ActionResult
 from automation.observers.windows_observer import WindowsObserver
 
 logger = logging.getLogger(__name__)

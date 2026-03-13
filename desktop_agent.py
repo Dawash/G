@@ -30,7 +30,7 @@ import os
 import re
 import time
 import requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -2995,7 +2995,6 @@ class DesktopAgent:
     def _pre_action_hook(self, tool_name, args):
         """Handle known pre-action patterns."""
         try:
-            from computer import press_key as _press_key
             import pygetwindow as gw
 
             # Before typing or pressing keys: verify correct window is focused

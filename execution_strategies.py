@@ -864,8 +864,13 @@ def execute_split_screen(app1, app2, action_registry=None):
         results[app1] = f1.result()
         results[app2] = f2.result()
 
-    # Wait for windows to appear
-    time.sleep(1.5)
+    # Event-driven wait: poll for both windows instead of fixed sleep
+    try:
+        from automation.event_waiter import wait_for_window
+        wait_for_window(app1, max_wait=3, interval=0.2)
+        wait_for_window(app2, max_wait=3, interval=0.2)
+    except ImportError:
+        time.sleep(1.5)
 
     # Snap windows side by side
     try:
@@ -1486,7 +1491,12 @@ class StrategySelector:
                 try:
                     from app_finder import launch_app
                     launch_app("chrome")
-                    time.sleep(2)
+                    # Event-driven wait for browser window instead of fixed sleep
+                    try:
+                        from automation.event_waiter import wait_for_window
+                        wait_for_window("chrome", max_wait=5, interval=0.2)
+                    except ImportError:
+                        time.sleep(2)
                     # Remove the hint flag
                     data.pop("_needs_browser", None)
                 except Exception:

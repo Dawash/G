@@ -15,8 +15,7 @@ import os
 import sqlite3
 import threading
 import time
-from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 

@@ -29,6 +29,7 @@ class ModeDecision:
 # Patterns that are ALWAYS quick mode -- single tool, no screen interaction
 QUICK_PATTERNS = [
     re.compile(r"^what('s| is) the (time|date|weather|temperature|forecast)", re.I),
+    re.compile(r"^what (time|date) is it", re.I),
     re.compile(r"^(get|tell|give) me the (time|date|weather|news)", re.I),
     re.compile(r"^(open|launch|close|minimize|maximize)\s+(?!.*\b(and|then)\b)[\w\s]{1,30}$", re.I),
     re.compile(r"^set (a |an )?reminder\b", re.I),

@@ -1,12 +1,9 @@
 """
 Speech subsystem — STT, TTS, wake word, barge-in, audio state.
 
-This module is the original monolithic speech.py (1341 lines). It remains
-fully functional and is the active implementation used by all callers.
-
-A refactored version lives in speech_new/ with the same public API split
-across focused modules (audio_state, stt, tts, wakeword, barge_in).
-See docs/speech-refactor-notes.md for migration details.
+STT: WhisperX (4x faster, batched inference) with faster-whisper fallback.
+TTS: Piper (English) + gTTS (Hindi/Nepali) + pyttsx3 fallback.
+VAD: Silero neural voice activity detection.
 """
 
 import logging
@@ -712,12 +709,13 @@ def _is_noise(text):
 
 
 # ===================================================================
-# Whisper STT (faster-whisper — offline, GPU-accelerated, multilingual)
+# Whisper STT — WhisperX (4x faster) with faster-whisper fallback
 # ===================================================================
 
 _whisper_model = None
 _whisper_lock = threading.Lock()
 _whisper_failed = False  # Cache failure state to avoid 80K repeated warnings
+_whisper_backend = None  # "whisperx" or "faster_whisper"
 
 # Local model path (avoids slow HuggingFace cache on Windows)
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -757,12 +755,12 @@ def _ensure_local_model():
 
 
 def _get_whisper_model():
-    """Lazy-load the faster-whisper model. Uses local path for instant loading."""
-    global _whisper_model, _whisper_failed
+    """Lazy-load STT model. Tries WhisperX (4x faster) then faster-whisper."""
+    global _whisper_model, _whisper_failed, _whisper_backend
     if _whisper_model is not None:
         return _whisper_model
     if _whisper_failed:
-        return None  # Don't retry after a cached failure
+        return None
 
     with _whisper_lock:
         if _whisper_model is not None:
@@ -770,30 +768,52 @@ def _get_whisper_model():
         if _whisper_failed:
             return None
 
+        # Detect CUDA
+        device = "cpu"
+        compute_type = "int8"
         try:
-            from faster_whisper import WhisperModel
-
-            # CTranslate2 handles CUDA detection internally
-            device = "cpu"
-            compute_type = "int8"
+            import torch
+            if torch.cuda.is_available():
+                device = "cuda"
+                compute_type = "float16"
+        except ImportError:
             try:
                 import ctranslate2
                 if "cuda" in ctranslate2.get_supported_compute_types("cuda"):
                     device = "cuda"
                     compute_type = "float16"
             except Exception:
-                pass  # No CUDA available, use CPU
+                pass
+
+        # Try WhisperX first (4x faster with batched inference)
+        try:
+            import whisperx
+            logging.info(f"Loading WhisperX model on {device} ({compute_type})...")
+            _whisper_model = whisperx.load_model(
+                "base", device=device, compute_type=compute_type,
+            )
+            _whisper_backend = "whisperx"
+            logging.info("WhisperX model loaded (4x faster than standard Whisper)")
+            return _whisper_model
+        except ImportError:
+            logging.info("WhisperX not installed, trying faster-whisper...")
+        except Exception as e:
+            logging.warning(f"WhisperX load failed ({e}), trying faster-whisper...")
+
+        # Fallback: faster-whisper
+        try:
+            from faster_whisper import WhisperModel
 
             model_path = _ensure_local_model()
-            logging.info(f"Loading Whisper model from {model_path} on {device} ({compute_type})...")
+            logging.info(f"Loading faster-whisper from {model_path} on {device} ({compute_type})...")
             _whisper_model = WhisperModel(
                 model_path,
                 device=device,
                 compute_type=compute_type,
             )
-            logging.info("Whisper model loaded successfully")
+            _whisper_backend = "faster_whisper"
+            logging.info("faster-whisper model loaded successfully")
 
-            # If we used HuggingFace download, copy to local for next time
             if model_path == "base" and not os.path.isfile(
                 os.path.join(_LOCAL_MODEL_DIR, "model.bin")
             ):
@@ -803,7 +823,7 @@ def _get_whisper_model():
 
         except ImportError:
             _whisper_failed = True
-            logging.warning("faster-whisper not installed. Using Google STT fallback.")
+            logging.warning("Neither whisperx nor faster-whisper installed. Using Google STT fallback.")
             return None
         except Exception as e:
             _whisper_failed = True
@@ -877,50 +897,74 @@ def _listen_whisper():
                     return "__NO_MIC__"
                 raise
 
-        # Transcribe with Whisper
-        # Skip Whisper's internal VAD if Silero already filtered the audio
+        # Transcribe with Whisper (WhisperX or faster-whisper)
         try:
-            # Domain vocabulary boost: prime Whisper with project-specific terms
-            # This dramatically improves recognition of app names, tech terms, etc.
             _DOMAIN_PROMPT = (
                 "G, Spotify, YouTube, Chrome, Firefox, Notepad, Discord, Steam, "
                 "HTML, CSS, JavaScript, calculator, OpenClaw, browser, terminal, "
                 "PowerShell, Kathmandu, Nepal, playlist, reminder, weather, "
                 "Blinding Lights, romantic, agentic, minimize, screenshot"
             )
-            segments, info = model.transcribe(
-                tmp_path,
-                beam_size=1,  # Greedy decoding — ~3x faster for short commands
-                language=None,  # Auto-detect language
-                initial_prompt=_DOMAIN_PROMPT,  # Vocabulary boost
-                vad_filter=not used_silero_vad,  # Only use Whisper VAD if Silero wasn't used
-                vad_parameters=dict(
-                    min_silence_duration_ms=300,
-                    speech_pad_ms=200,
-                ) if not used_silero_vad else None,
-            )
 
-            text_parts = []
-            avg_logprob_sum = 0.0
-            no_speech_sum = 0.0
-            seg_count = 0
-            for segment in segments:
-                text_parts.append(segment.text.strip())
-                avg_logprob_sum += getattr(segment, 'avg_logprob', 0.0)
-                no_speech_sum += getattr(segment, 'no_speech_prob', 0.0)
-                seg_count += 1
+            text = None
+            detected_lang = None
+            lang_prob = 0.0
 
-            text = " ".join(text_parts).strip()
+            if _whisper_backend == "whisperx":
+                # WhisperX: batched inference (4x faster)
+                import whisperx
+                audio = whisperx.load_audio(tmp_path)
+                result = model.transcribe(
+                    audio,
+                    batch_size=8,
+                    language=None,  # Auto-detect
+                )
+                segments = result.get("segments", [])
+                detected_lang = result.get("language", "en")
+                lang_prob = 0.9  # WhisperX doesn't expose probability
 
-            # Confidence filtering: reject low-quality transcriptions
-            if seg_count > 0:
-                avg_logprob = avg_logprob_sum / seg_count
-                avg_no_speech = no_speech_sum / seg_count
-                # avg_logprob < -1.0 means very low confidence (garbled audio)
-                # no_speech_prob > 0.6 means likely not speech
-                if avg_logprob < -1.0 or avg_no_speech > 0.6:
-                    logging.info(f"Whisper low confidence: '{text}' (logprob={avg_logprob:.2f}, no_speech={avg_no_speech:.2f})")
-                    text = None
+                text_parts = []
+                for seg in segments:
+                    seg_text = seg.get("text", "").strip()
+                    if seg_text:
+                        text_parts.append(seg_text)
+                text = " ".join(text_parts).strip()
+
+            else:
+                # faster-whisper: standard transcription
+                segments, info = model.transcribe(
+                    tmp_path,
+                    beam_size=1,
+                    language=None,
+                    initial_prompt=_DOMAIN_PROMPT,
+                    vad_filter=not used_silero_vad,
+                    vad_parameters=dict(
+                        min_silence_duration_ms=300,
+                        speech_pad_ms=200,
+                    ) if not used_silero_vad else None,
+                )
+
+                text_parts = []
+                avg_logprob_sum = 0.0
+                no_speech_sum = 0.0
+                seg_count = 0
+                for segment in segments:
+                    text_parts.append(segment.text.strip())
+                    avg_logprob_sum += getattr(segment, 'avg_logprob', 0.0)
+                    no_speech_sum += getattr(segment, 'no_speech_prob', 0.0)
+                    seg_count += 1
+
+                text = " ".join(text_parts).strip()
+                detected_lang = info.language
+                lang_prob = info.language_probability
+
+                # Confidence filtering (faster-whisper only — has logprob data)
+                if seg_count > 0:
+                    avg_logprob = avg_logprob_sum / seg_count
+                    avg_no_speech = no_speech_sum / seg_count
+                    if avg_logprob < -1.0 or avg_no_speech > 0.6:
+                        logging.info(f"Whisper low confidence: '{text}' (logprob={avg_logprob:.2f}, no_speech={avg_no_speech:.2f})")
+                        text = None
 
             # Echo detection: if transcription is >80% similar to last spoken text, discard
             with _echo_lock:
@@ -940,8 +984,8 @@ def _listen_whisper():
 
             if text:
                 # Update detected language with confidence gating
-                detected = info.language
-                prob = info.language_probability
+                detected = detected_lang
+                prob = lang_prob
                 if detected:
                     word_count = len(text.split())
                     with _language_lock:

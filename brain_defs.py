@@ -242,6 +242,14 @@ def _manage_files(action, path, destination=None):
                 os.remove(full_path)
             else:
                 return f"'{path}' not found."
+            # Verify deletion with event-driven wait
+            try:
+                from automation.event_waiter import wait_for_file_gone
+                result = wait_for_file_gone(full_path, max_wait=5, interval=0.2)
+                if not result["gone"]:
+                    return f"Delete issued for {path}, but it may still exist (locked?)."
+            except ImportError:
+                pass
             return f"Deleted {path}."
 
         elif action == "zip":
@@ -290,6 +298,12 @@ def _manage_files(action, path, destination=None):
                 os.makedirs(os.path.dirname(full_path), exist_ok=True)
                 with open(full_path, "w", encoding="utf-8") as f:
                     f.write(content)
+                # Verify creation with event-driven wait
+                try:
+                    from automation.event_waiter import wait_for_file
+                    wait_for_file(full_path, max_wait=3, interval=0.2)
+                except ImportError:
+                    pass
                 return f"Created {path}"
             return "No file path specified."
 

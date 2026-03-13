@@ -7,7 +7,6 @@ and returns ActionResult with verification.
 import logging
 import os
 import shutil
-from pathlib import Path
 
 from automation.executors.base import ActionResult
 from automation.observers.filesystem_observer import FilesystemObserver

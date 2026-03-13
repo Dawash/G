@@ -18,7 +18,6 @@ import os
 import subprocess
 import time
 import winreg
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -533,7 +532,8 @@ def launch_app(app_name):
 def _activate_app_window(display_name, name_lower, timeout=5.0):
     """Wait for a newly launched app window to appear and bring it to foreground.
 
-    Uses multiple strategies:
+    Uses event-driven waiting (polls at 200ms) instead of fixed sleeps.
+    Strategies for activation:
     1. pygetwindow.activate() (fast, works 80% of the time)
     2. ctypes SetForegroundWindow (reliable Win32 API fallback)
     3. Alt-key trick to bypass foreground lock restriction
@@ -596,49 +596,45 @@ def _activate_app_window(display_name, name_lower, timeout=5.0):
             pass
         return False
 
-    start = time.time()
-    found_window = False
-    while time.time() - start < timeout:
-        time.sleep(0.4)
+    # Event-driven wait: poll for window using wait_for_window instead of fixed sleep.
+    # Try the primary keyword first (most specific), fall back to display name words.
+    from automation.event_waiter import wait_for_window
+    result = wait_for_window(name_lower, max_wait=timeout, interval=0.2)
+    if not result["found"]:
+        # Try display name words as fallback
+        for kw in keywords[1:]:
+            result = wait_for_window(kw, max_wait=1.0, interval=0.2)
+            if result["found"]:
+                break
 
-        # Check for blocking popups first
+    if not result["found"]:
         _dismiss_app_picker()
+        return
 
-        try:
-            for w in gw.getAllWindows():
-                if not w.title:
-                    continue
-                title_lower = w.title.lower()
-                for kw in keywords:
-                    if kw in title_lower:
-                        found_window = True
-                        try:
-                            # First try pygetwindow
-                            if w.isMinimized:
-                                w.restore()
-                                time.sleep(0.2)
-                            w.activate()
-                            logger.info(f"Activated window: {w.title}")
-                            return
-                        except Exception:
-                            # Fallback: Win32 API force foreground
-                            hwnd = w._hWnd
-                            if _force_foreground(hwnd):
-                                logger.info(f"Force-activated window: {w.title}")
-                                return
-        except Exception:
-            pass
+    logger.info(f"Window appeared in {result['elapsed']:.1f}s: {result['title']}")
 
-    # If we found the window but couldn't activate it, try one more Win32 approach
-    if found_window:
-        try:
-            for w in gw.getAllWindows():
-                if not w.title:
-                    continue
-                title_lower = w.title.lower()
-                for kw in keywords:
-                    if kw in title_lower:
-                        _force_foreground(w._hWnd)
+    # Check for blocking popups
+    _dismiss_app_picker()
+
+    # Activate the found window
+    try:
+        for w in gw.getAllWindows():
+            if not w.title:
+                continue
+            title_lower = w.title.lower()
+            for kw in keywords:
+                if kw in title_lower:
+                    try:
+                        if w.isMinimized:
+                            w.restore()
+                            time.sleep(0.2)
+                        w.activate()
+                        logger.info(f"Activated window: {w.title}")
                         return
-        except Exception:
-            pass
+                    except Exception:
+                        hwnd = w._hWnd
+                        if _force_foreground(hwnd):
+                            logger.info(f"Force-activated window: {w.title}")
+                            return
+    except Exception:
+        pass

@@ -1,12 +1,8 @@
 """
 Desktop automation subsystem — agentic mode + UI Automation.
 
-Agent modules (Phase 10 decomposition):
+Agent modules:
   - desktop_agent.py: Top-level agent orchestrator (DesktopAgentV2)
-  - planner.py: LLM-driven step planning (AgentPlanner)
-  - observer.py: Screenshot + vision + window state (ScreenObserver)
-  - verifier.py: Step and goal verification (StepVerifier)
-  - recovery.py: Failure diagnosis and retry logic (FailureRecovery)
 
 UI Automation modules (Phase 16):
   - ui_control.py: UIA-based control interaction (find/click/set_text/inspect)
@@ -22,11 +18,4 @@ App drivers (Phase 20):
   - drivers/browser.py: Chrome/Edge/Firefox operations
   - drivers/explorer.py: File Explorer operations
   - drivers/settings.py: Windows Settings operations
-
-World state (Phase 20):
-  - world_state.py: Task-level state tracking, failure taxonomy
-
-The original desktop_agent.py in the project root remains the active
-implementation. This package provides the decomposed architecture for
-incremental migration.
 """

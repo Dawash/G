@@ -6,7 +6,7 @@ via Win32/pygetwindow/psutil. Sub-second execution.
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from automation.observers.base import ObservationResult
 

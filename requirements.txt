@@ -5,6 +5,7 @@ requests
 pygetwindow
 rapidfuzz
 faster-whisper
+whisperx
 gTTS
 pygame
 pyautogui

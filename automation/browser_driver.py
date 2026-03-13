@@ -14,7 +14,6 @@ content, run JavaScript. Falls back gracefully when CDP isn't available.
 
 import json
 import logging
-import re
 import time
 
 logger = logging.getLogger(__name__)

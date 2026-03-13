@@ -608,7 +608,6 @@ def set_control_text(name=None, text="", role=None, window=None):
                 child = wins[0].child_window(title=ctrl_name,
                                              control_type=ctrl_info["type"])
                 if child.exists():
-                    from pywinauto.controls.uiawrapper import UIAWrapper
                     iface = child.iface_value
                     if iface:
                         iface.SetValue(text)
@@ -662,7 +661,6 @@ def get_focused_element():
     """
     try:
         from pywinauto.uia_defines import IUIA
-        from comtypes import COMError
 
         iuia = IUIA()
         focused = iuia.iuia.GetFocusedElement()

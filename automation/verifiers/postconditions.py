@@ -5,8 +5,6 @@ Sub-100ms execution. Uses observers for state reading.
 """
 
 import logging
-import os
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
