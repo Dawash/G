@@ -43,22 +43,27 @@ _CLI_BLOCKED = {"format", "del /s", "rm -rf", "remove-item c:", "remove-item /",
 
 def _list_files_cmd(location):
     """Generate PowerShell command to list files in a known location."""
-    _LOCATIONS = {
-        "desktop": "$env:USERPROFILE\\Desktop",
-        "documents": "$env:USERPROFILE\\Documents",
-        "downloads": "$env:USERPROFILE\\Downloads",
-        "pictures": "$env:USERPROFILE\\Pictures",
-        "videos": "$env:USERPROFILE\\Videos",
-        "music": "$env:USERPROFILE\\Music",
+    _DOTNET_FOLDERS = {
+        "desktop": "Desktop",
+        "documents": "MyDocuments",
+        "downloads": "",  # special
+        "pictures": "MyPictures",
+        "videos": "MyVideos",
+        "music": "MyMusic",
     }
-    path = _LOCATIONS.get(location.lower(), f"$env:USERPROFILE\\{location}")
+    loc_lower = location.lower()
+    dotnet_name = _DOTNET_FOLDERS.get(loc_lower)
+    if loc_lower == "downloads":
+        path_line = "$p = Join-Path $env:USERPROFILE 'Downloads'"
+    elif dotnet_name:
+        path_line = f"$p = [Environment]::GetFolderPath('{dotnet_name}')"
+    else:
+        path_line = f"$p = Join-Path $env:USERPROFILE '{location}'"
     return (
-        f"$files = Get-ChildItem '{path}' -ErrorAction SilentlyContinue | "
-        "Select-Object Name,@{N='Size';E={if($_.PSIsContainer){'folder'}elseif($_.Length -ge 1GB)"
-        "{'{0:N1} GB' -f ($_.Length/1GB)}elseif($_.Length -ge 1MB){'{0:N0} MB' -f ($_.Length/1MB)}"
-        "else{'{0:N0} KB' -f ($_.Length/1KB)}}} | Select-Object -First 20; "
-        f"if($files){{ 'Files on your {location}: ' + ($files | ForEach-Object {{ "
-        "\"$($_.Name) ($($_.Size))\" }) -join ', ' }}else{{ 'No files found.' }}"
+        f"{path_line}; "
+        f"$items = Get-ChildItem $p -ErrorAction SilentlyContinue | Select-Object -First 20 Name; "
+        f"if ($items) {{ 'Files on your {location}: ' + (($items).Name -join ', ') + '.' }} "
+        f"else {{ 'No files found on your {location}.' }}"
     )
 
 
