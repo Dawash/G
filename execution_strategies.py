@@ -164,6 +164,9 @@ _CLI_COMMANDS = [
      lambda m: "'CPU is at {0}% load.' -f (Get-CimInstance Win32_Processor).LoadPercentage"),
     (r"\b(?:ram|memory)\s*(?:usage|free|available|status|info)",
      lambda m: "Get-CimInstance Win32_OperatingSystem | ForEach-Object { $total = [math]::Round($_.TotalVisibleMemorySize/1MB,1); $free = [math]::Round($_.FreePhysicalMemory/1MB,1); $used = [math]::Round($total - $free, 1); \"You have $total GB total RAM. $used GB is in use, $free GB is free.\" }"),
+    # "how much ram do i have", "how much memory do i have", "how much ram is there"
+    (r"\bhow\s+much\s+(?:ram|memory)\s+(?:do\s+i\s+have|is\s+there|have\s+i\s+got)",
+     lambda m: "Get-CimInstance Win32_OperatingSystem | ForEach-Object { $total = [math]::Round($_.TotalVisibleMemorySize/1MB,1); $free = [math]::Round($_.FreePhysicalMemory/1MB,1); $used = [math]::Round($total - $free, 1); \"You have $total GB total RAM. $used GB is in use, $free GB is free.\" }"),
     # "how much ram am I using", "how much memory is being used"
     (r"\bhow\s+much\s+(?:ram|memory)\s+(?:am\s+i|is\s+(?:being\s+)?)\s*(?:using|used|consumed)",
      lambda m: "Get-CimInstance Win32_OperatingSystem | ForEach-Object { $total = [math]::Round($_.TotalVisibleMemorySize/1MB,1); $free = [math]::Round($_.FreePhysicalMemory/1MB,1); $used = [math]::Round($total - $free, 1); $pct = [math]::Round($used/$total*100); \"You're using $used GB out of $total GB of RAM ($pct% used).\" }"),
@@ -1869,7 +1872,7 @@ class StrategySelector:
             elif strategy == STRATEGY_TOOL:
                 tool_name = data.get("tool")
                 tool_args = data.get("args", {})
-                if action_registry:
+                if action_registry is not None:
                     from brain import execute_tool
                     return execute_tool(tool_name, tool_args, action_registry)
                 return None

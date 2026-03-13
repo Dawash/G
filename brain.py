@@ -1578,9 +1578,9 @@ class Brain:
         # --- Unit conversion fast-path: "convert 100 fahrenheit to celsius" ---
         _conv_match = _re.search(
             r'(?:convert\s+)?(\d+(?:\.\d+)?)\s*(?:degrees?\s+)?'
-            r'(fahrenheit|celsius|f|c|km|miles?|kg|pounds?|lbs?|meters?|feet|ft|inches?|cm)'
+            r'(fahrenheit|celsius|f|c|kilometers?|km|miles?|kilograms?|kg|pounds?|lbs?|meters?|feet|ft|inches?|centimeters?|cm)'
             r'\s+(?:to|in)\s+'
-            r'(fahrenheit|celsius|f|c|km|miles?|kg|pounds?|lbs?|meters?|feet|ft|inches?|cm)',
+            r'(fahrenheit|celsius|f|c|kilometers?|km|miles?|kilograms?|kg|pounds?|lbs?|meters?|feet|ft|inches?|centimeters?|cm)',
             _ui_lower
         )
         if _conv_match:
@@ -1590,7 +1590,14 @@ class Brain:
                 u = u.lower()
                 if u.endswith('s') and not u.endswith('us'):
                     u = u[:-1]
-                return u
+                # Map long-form names to abbreviations used in conversion dict
+                _aliases = {
+                    'kilogram': 'kg', 'kilometer': 'km', 'centimeter': 'cm',
+                    'pound': 'pound', 'lb': 'pound',
+                    'mile': 'mile', 'meter': 'meter',
+                    'foot': 'feet', 'inch': 'inch',
+                }
+                return _aliases.get(u, u)
             src = _norm_unit(_conv_match.group(2))
             dst = _norm_unit(_conv_match.group(3))
             conversions = {
@@ -1615,6 +1622,64 @@ class Brain:
                 result_val = fn(val)
                 logger.info(f"Direct dispatch: conversion fast-path ({val} {src} → {result_val:.2f} {dst})")
                 return f"{val:g} {src} = {result_val:.2f} {dst}"
+
+        # --- Pure knowledge/chat questions: skip everything, use quick_chat() ---
+        # This MUST come before the StrategySelector to avoid the overhead of
+        # gather_context() + execute_step() for questions like "what is the
+        # capital of Australia" that need zero system interaction.
+        # "what is RAM" = knowledge (quick_chat), "how much RAM" = system (tool)
+        _no_tool_needed = (
+            _RE_KNOWLEDGE_START.search(user_input)
+            and not _RE_ACTION_WORDS.search(user_input)
+            and not _RE_TIME_DATE.search(user_input)
+            # Allow knowledge about tech topics (RAM, CPU, etc.) — only block system queries
+            and not _RE_SYSTEM_QUERY.search(user_input)
+        )
+        if _no_tool_needed and len(user_input.split()) <= 20:
+            # Check if this is a real-time question before even asking the LLM
+            _needs_realtime = _is_realtime_question(user_input)
+
+            if _needs_realtime:
+                # Real-time question: try web search first for fresh data
+                logger.info("Direct dispatch: real-time question detected, trying web search first")
+                try:
+                    from web_agent import web_search_extract
+                    web_result = web_search_extract(user_input)
+                    if web_result and len(web_result) > 20 and "couldn't find" not in web_result.lower():
+                        # Naturalize the web result through LLM for a conversational answer
+                        try:
+                            natural = self.quick_chat(
+                                f"The user asked: \"{user_input}\"\n"
+                                f"Here is the latest information from the web:\n{web_result[:1500]}\n\n"
+                                "Give a short, direct answer based on this web data. "
+                                "Include the specific numbers/facts. Be conversational."
+                            )
+                            if natural and len(natural) > 10:
+                                return natural
+                        except Exception:
+                            pass
+                        return web_result
+                except Exception as e:
+                    logger.debug(f"Web search fallback failed for real-time question: {e}")
+
+            # Try LLM quick_chat for knowledge questions
+            logger.info("Direct dispatch: quick_chat (pure knowledge question)")
+            try:
+                answer = self.quick_chat(user_input)
+                if answer and len(answer) > 5:
+                    # NOTE: We intentionally skip _is_weak_llm_answer() here.
+                    # This code only runs for non-realtime knowledge questions
+                    # (realtime questions take the web-search-first path above).
+                    # For static knowledge (capitals, definitions, history, etc.)
+                    # the LLM always knows the answer. Many LLMs add disclaimers
+                    # ("as of my training data...", "for the latest...") even to
+                    # correct answers, which previously triggered a costly web
+                    # search fallback (adding ~40s for DuckDuckGo + 2nd LLM call).
+                    # Trust the LLM for pure knowledge — it's correct 99% of the
+                    # time, and the realtime pattern catches genuinely dynamic Qs.
+                    return answer
+            except Exception:
+                pass
 
         # --- StrategySelector: tries CLI → API → WEBSITE → TOOL → UIA → CDP ---
         selector = get_selector()
@@ -1666,74 +1731,6 @@ class Brain:
                     logger.warning(f"Agent escalation failed: {e}")
 
             return str(result)
-
-        # Pure knowledge/chat questions: skip tool calling, use quick_chat()
-        # Exclude only system-action words, not knowledge about those topics.
-        # "what is RAM" = knowledge (quick_chat), "how much RAM" = system (tool)
-        _no_tool_needed = (
-            _RE_KNOWLEDGE_START.search(user_input)
-            and not _RE_ACTION_WORDS.search(user_input)
-            and not _RE_TIME_DATE.search(user_input)
-            # Allow knowledge about tech topics (RAM, CPU, etc.) — only block system queries
-            and not _RE_SYSTEM_QUERY.search(user_input)
-        )
-        if _no_tool_needed and len(user_input.split()) <= 20:
-            # Check if this is a real-time question before even asking the LLM
-            _needs_realtime = _is_realtime_question(user_input)
-
-            if _needs_realtime:
-                # Real-time question: try web search first for fresh data
-                logger.info("Direct dispatch: real-time question detected, trying web search first")
-                try:
-                    from web_agent import web_search_extract
-                    web_result = web_search_extract(user_input)
-                    if web_result and len(web_result) > 20 and "couldn't find" not in web_result.lower():
-                        # Naturalize the web result through LLM for a conversational answer
-                        try:
-                            natural = self.quick_chat(
-                                f"The user asked: \"{user_input}\"\n"
-                                f"Here is the latest information from the web:\n{web_result[:1500]}\n\n"
-                                "Give a short, direct answer based on this web data. "
-                                "Include the specific numbers/facts. Be conversational."
-                            )
-                            if natural and len(natural) > 10:
-                                return natural
-                        except Exception:
-                            pass
-                        return web_result
-                except Exception as e:
-                    logger.debug(f"Web search fallback failed for real-time question: {e}")
-
-            # Try LLM quick_chat for knowledge questions
-            logger.info("Direct dispatch: quick_chat (pure knowledge question)")
-            try:
-                answer = self.quick_chat(user_input)
-                if answer and len(answer) > 5:
-                    # Check if the LLM admitted it can't answer (weak response)
-                    if _is_weak_llm_answer(answer):
-                        logger.info("LLM gave weak answer, falling back to web search")
-                        try:
-                            from web_agent import web_search_extract
-                            web_result = web_search_extract(user_input)
-                            if web_result and len(web_result) > 20 and "couldn't find" not in web_result.lower():
-                                # Naturalize web result for conversational delivery
-                                try:
-                                    natural = self.quick_chat(
-                                        f"The user asked: \"{user_input}\"\n"
-                                        f"Here is the latest information from the web:\n{web_result[:1500]}\n\n"
-                                        "Give a short, direct answer based on this web data. "
-                                        "Include the specific numbers/facts. Be conversational."
-                                    )
-                                    if natural and len(natural) > 10:
-                                        return natural
-                                except Exception:
-                                    pass
-                                return web_result
-                        except Exception as e:
-                            logger.debug(f"Web search fallback failed after weak LLM answer: {e}")
-                    return answer
-            except Exception:
-                pass
 
         return None
 
