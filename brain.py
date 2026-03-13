@@ -156,6 +156,13 @@ _register_browser_tools(_tool_registry)  # CDP persistent session (overwrites de
 _register_mw_tools(_tool_registry)
 _register_interactive_tools(_tool_registry)  # ask_user_choice, ask_user_input, ask_yes_no
 
+# Code Interpreter (safe Python sandbox)
+try:
+    from tools.code_interpreter import register_code_interpreter as _register_code_interpreter
+    _register_code_interpreter(_tool_registry)
+except Exception:
+    pass
+
 # Set registry as the global default (used by brain_defs.py for resolution)
 from tools.registry import set_default as _set_default_registry
 _set_default_registry(_tool_registry)
@@ -2057,12 +2064,23 @@ class Brain:
         return _classify_mode_fn(user_input, quick_chat_fn=self.quick_chat)
 
     def _run_agent_mode(self, user_input):
-        """Run autonomous agent. Tries CLI/API strategies first, then desktop agent."""
+        """Run autonomous agent. Tries CLI/API strategies first, then desktop agent.
+
+        For complex multi-step tasks, uses the SwarmOrchestrator (multi-agent team).
+        For simpler agent tasks, uses the existing desktop agent path.
+        """
         # Skip strategy shortcut for UI-interactive tasks — these need full agent
         _ui_interactive = re.search(
             r'\b(spotify|youtube)\b.*(play|search|find|watch|listen)|'
             r'(play|search|find|watch|listen).*(spotify|youtube)\b|'
             r'\b(order|book|buy|purchase)\b.*(online|pizza|food|ticket)',
+            user_input, re.I)
+
+        # Detect complex multi-step tasks that benefit from multi-agent swarm
+        _complex_task = re.search(
+            r'\b(plan|book|order|create|research|build|organize|schedule|prepare)\b.+'
+            r'\b(and|then|also|plus|after|with)\b.+'
+            r'\b(send|post|upload|create|save|book|set|open|email|share)\b',
             user_input, re.I)
 
         # Track which strategies were tried (pass to agent to avoid retrying)
@@ -2085,6 +2103,20 @@ class Brain:
                 logger.debug(f"Strategy pre-check failed: {e}")
         else:
             logger.info(f"Agent mode: skipping strategy shortcut for UI task '{user_input[:40]}'")
+
+        # --- Multi-Agent Swarm for complex tasks ---
+        if _complex_task or _ui_interactive:
+            try:
+                from agents.orchestrator import SwarmOrchestrator
+                swarm = SwarmOrchestrator(self, speak_fn=self.speak_fn)
+                result = swarm.execute(user_input)
+                if result and "error" not in str(result).lower()[:30]:
+                    logger.info(f"Swarm completed: {user_input[:40]}")
+                    return result
+                # Swarm failed — fall through to legacy agent
+                logger.info(f"Swarm partial/failed, falling back to legacy agent")
+            except Exception as e:
+                logger.warning(f"Swarm orchestrator failed: {e}, falling back to legacy agent")
 
         from orchestration.agent_runner import run_agent_mode
         return run_agent_mode(
