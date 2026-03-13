@@ -1,8 +1,8 @@
-"""Browser state observer — structured state via CDP, no side effects.
+"""Browser state observer — structured state via Playwright/CDP, no side effects.
 
-Reads browser tabs, current URL, page structure, page text via Chrome
-DevTools Protocol. Falls back to UIA (address bar) and window title.
-Sub-second execution for CDP calls.
+Reads browser tabs, current URL, page structure, page text via Playwright
+(preferred) or Chrome DevTools Protocol. Falls back to UIA (address bar)
+and window title. Sub-second execution.
 """
 
 import logging
@@ -11,6 +11,13 @@ from dataclasses import dataclass, field
 from automation.observers.base import ObservationResult
 
 logger = logging.getLogger(__name__)
+
+# Try Playwright for state reading (preferred over raw CDP)
+try:
+    from automation.playwright_session import get_playwright_session
+    _HAS_PLAYWRIGHT = True
+except ImportError:
+    _HAS_PLAYWRIGHT = False
 
 
 @dataclass
@@ -45,8 +52,20 @@ class BrowserObserver:
         except Exception:
             return False
 
+    def is_playwright_available(self):
+        """Check if Playwright is available and can reach the browser."""
+        if not _HAS_PLAYWRIGHT:
+            return False
+        try:
+            pw = get_playwright_session()
+            return pw.is_browser_available()
+        except Exception:
+            return False
+
     def is_cdp_available(self):
-        """Check if Chrome DevTools Protocol is accessible."""
+        """Check if Chrome DevTools Protocol (or Playwright) is accessible."""
+        if self.is_playwright_available():
+            return True
         try:
             from automation.browser_driver import is_cdp_available
             return is_cdp_available()
@@ -56,6 +75,7 @@ class BrowserObserver:
     def get_current_url(self):
         """Get the URL of the active browser tab.
 
+        Tier 0: Playwright
         Tier 1: CDP /json endpoint
         Tier 2: UIA address bar
         Tier 3: Window title parsing
@@ -63,6 +83,17 @@ class BrowserObserver:
         Returns:
             str: URL or empty string
         """
+        # Tier 0: Playwright
+        if _HAS_PLAYWRIGHT:
+            try:
+                pw = get_playwright_session()
+                if pw._connected and pw._page:
+                    url = pw.get_url()
+                    if url:
+                        return url
+            except Exception:
+                pass
+
         try:
             from automation.browser_driver import browser_get_url
             url = browser_get_url()
@@ -78,7 +109,18 @@ class BrowserObserver:
         Returns:
             str: Page title or empty string
         """
-        # Try CDP
+        # Tier 0: Playwright
+        if _HAS_PLAYWRIGHT:
+            try:
+                pw = get_playwright_session()
+                if pw._connected and pw._page:
+                    title = pw.get_title()
+                    if title:
+                        return title
+            except Exception:
+                pass
+
+        # Tier 1: CDP
         try:
             from automation.browser_driver import _get_tabs, _check_cdp
             if _check_cdp():
@@ -110,6 +152,25 @@ class BrowserObserver:
         Returns:
             list[TabInfo]
         """
+        # Tier 0: Playwright
+        if _HAS_PLAYWRIGHT:
+            try:
+                pw = get_playwright_session()
+                if pw._connected and pw._context:
+                    tabs = pw.get_tabs()
+                    if tabs:
+                        return [
+                            TabInfo(
+                                title=t.get("title", ""),
+                                url=t.get("url", ""),
+                                index=i,
+                                is_active=(i == 0),
+                            )
+                            for i, t in enumerate(tabs)
+                        ]
+            except Exception:
+                pass
+
         try:
             from automation.browser_driver import browser_get_tabs
             raw_tabs = browser_get_tabs()
@@ -137,6 +198,7 @@ class BrowserObserver:
         Returns:
             PageSnapshot
         """
+        # Tier 0: Playwright (via browser_snapshot which already tries Playwright)
         try:
             from automation.browser_driver import browser_snapshot
             snap = browser_snapshot()
@@ -159,6 +221,17 @@ class BrowserObserver:
         Returns:
             str: Page text (truncated to 3000 chars)
         """
+        # Tier 0: Playwright
+        if _HAS_PLAYWRIGHT:
+            try:
+                pw = get_playwright_session()
+                if pw._connected and pw._page:
+                    text = pw.get_text(selector)
+                    if text and len(text.strip()) > 10:
+                        return text[:3000]
+            except Exception:
+                pass
+
         try:
             from automation.browser_driver import browser_read
             return browser_read(selector) or ""
@@ -172,7 +245,8 @@ class BrowserObserver:
             ObservationResult
         """
         is_running = self.is_browser_running()
-        cdp = self.is_cdp_available()
+        pw_available = self.is_playwright_available()
+        cdp = pw_available or self.is_cdp_available()
         url = self.get_current_url() if is_running else ""
         title = self.get_current_title() if is_running else ""
         tabs = self.get_all_tabs() if is_running else []
@@ -180,6 +254,7 @@ class BrowserObserver:
         data = {
             "is_running": is_running,
             "cdp_available": cdp,
+            "playwright_available": pw_available,
             "current_url": url,
             "current_title": title,
             "tab_count": len(tabs),
@@ -189,7 +264,7 @@ class BrowserObserver:
             ],
         }
 
-        source = "cdp" if cdp else ("uia" if is_running else "none")
+        source = "playwright" if pw_available else ("cdp" if cdp else ("uia" if is_running else "none"))
 
         return ObservationResult(
             domain="browser",

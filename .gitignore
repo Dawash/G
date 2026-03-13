@@ -10,6 +10,13 @@ email_creds.json
 # === Dependency cache ===
 .deps_ok
 
+# === Vector DB / Embeddings ===
+*.faiss
+*_meta.json
+vectors_meta.json
+skill_vectors_meta.json
+bb_vectors_meta.json
+
 # === Runtime state & cache ===
 responses.json
 app_cache.json

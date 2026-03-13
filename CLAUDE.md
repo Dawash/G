@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Voice-first personal AI operating system for Windows. Listens continuously via microphone (with wake word detection), understands intent using AI, executes system/web actions, and speaks responses naturally. Primary provider is **Ollama** (local, qwen2.5:7b). Also supports **OpenAI, Anthropic, and OpenRouter** APIs. Features wake word detection, conversation mode with auto-sleep, meta-commands (undo, repeat, shorter, correction), context awareness, topic tracking, intelligent app discovery, desktop automation (agentic mode), persistent memory with personalization, speech barge-in, reminders, weather, news, email, web reading, vision, and more.
+Voice-first personal AI operating system for Windows. Listens continuously via microphone (with wake word detection), understands intent using AI, executes system/web actions, and speaks responses naturally. Primary provider is **Ollama** (local, qwen2.5:32b). Also supports **OpenAI, Anthropic, and OpenRouter** APIs. Features wake word detection, conversation mode with auto-sleep, meta-commands (undo, repeat, shorter, correction), context awareness, topic tracking, intelligent app discovery, desktop automation (agentic mode), persistent memory with personalization, speech barge-in, reminders, weather, news, email, web reading, vision, FAISS vector search, Playwright browser automation, multi-agent debate, and more.
 
 ## Running the Assistant
 
@@ -100,7 +100,26 @@ ACTIVE state:
     → 90s inactivity? → switch to IDLE, "Going to sleep"
 ```
 
-The Brain uses native tool calling (Ollama qwen2.5:7b) to let the LLM decide which system actions to take. 3-tier fallback: native tool calls → JSON extraction from text → prompt-based mode. Mode-based routing: quick (80%, direct tool calling), agent (15%, desktop automation), research (5%, multi-source web research). Topic tracking adjusts context window size for multi-turn conversations on the same subject.
+The Brain uses native tool calling (Ollama qwen2.5:32b) to let the LLM decide which system actions to take. 3-tier fallback: native tool calls -> JSON extraction from text -> prompt-based mode. Mode-based routing: quick (80%, direct tool calling), agent (15%, desktop automation), research (5%, multi-source web research). Topic tracking adjusts context window size for multi-turn conversations on the same subject.
+
+### 12-Layer Execution Routing (execution_strategies.py)
+
+```
+Layer 1:  CACHE     — Instant replay of identical recent requests (0ms, 30s TTL)
+Layer 2:  CLI       — PowerShell/CMD for system operations (0.5s)
+Layer 3:  SETTINGS  — ms-settings: URI fast-path (0.3s, 20+ patterns)
+Layer 4:  API       — Direct service APIs: Spotify URI, YouTube CDP (1-2s)
+Layer 5:  WEBSITE   — Known website navigation (35+ sites) via Playwright/CDP (1s)
+Layer 6:  TOOL      — Brain tools: open_app, weather, time, search (0.5s)
+Layer 7:  COM       — Win32 COM for Excel/Word/Outlook/PowerPoint (0.5s)
+Layer 8:  UIA       — Windows Accessibility tree for desktop UI (0.2s)
+Layer 9:  CDP       — Chrome DevTools / Playwright for browser (1s)
+Layer 10: COMPOUND  — Chain multiple strategies for multi-step intents (varies)
+Layer 11: AGENT     — Full desktop agent with vision loop (5-30s)
+Layer 12: VISION    — Screenshot + LLM analysis (5-10s, last resort)
+```
+
+Key intelligence: context-aware routing, pronoun resolution, adaptive reordering (demotes strategies that fail), parallel execution (ThreadPoolExecutor with cancellation), result caching, postcondition verification.
 
 ### AI Provider System (ai_providers.py)
 

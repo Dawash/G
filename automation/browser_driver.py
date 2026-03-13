@@ -1,15 +1,17 @@
 """
-Browser automation via Chrome DevTools Protocol (CDP) + UIA + keyboard fallback.
+Browser automation via Playwright / CDP / UIA / keyboard fallback.
 
-Phase 17: Provides programmatic browser control without vision/screenshots.
+Phase 17+: Provides programmatic browser control without vision/screenshots.
 
 Resolution hierarchy:
+  0. Playwright (if installed — auto-wait, better selectors, cross-browser)
   1. CDP (if Chrome/Edge launched with --remote-debugging-port=9222)
   2. UIA (browser accessibility tree — address bar, tabs, bookmarks)
   3. Keyboard shortcuts (Ctrl+L, Ctrl+F, Ctrl+T, etc.)
 
-CDP gives full DOM access: navigate, click by selector, fill fields, read page
-content, run JavaScript. Falls back gracefully when CDP isn't available.
+Playwright and CDP both give full DOM access: navigate, click by selector,
+fill fields, read page content, run JavaScript. Falls back gracefully when
+neither is available.
 """
 
 import json
@@ -17,6 +19,13 @@ import logging
 import time
 
 logger = logging.getLogger(__name__)
+
+# Try Playwright (preferred — auto-wait, better selectors, cross-browser)
+try:
+    from automation.playwright_session import get_playwright_session
+    _HAS_PLAYWRIGHT = True
+except ImportError:
+    _HAS_PLAYWRIGHT = False
 
 # CDP connection settings
 _CDP_HOST = "localhost"
@@ -125,7 +134,18 @@ def browser_navigate(url):
     if not url.startswith(("http://", "https://", "file://")):
         url = "https://" + url
 
-    # Try CDP
+    # Tier 0: Playwright
+    if _HAS_PLAYWRIGHT:
+        try:
+            pw = get_playwright_session()
+            pw.connect()
+            pw.navigate(url)
+            title = pw.get_title()
+            return f"Navigated to {url} — {title}"
+        except Exception as e:
+            logger.debug(f"Playwright navigate failed, falling back to CDP: {e}")
+
+    # Tier 1: CDP
     if _check_cdp():
         ws = _get_active_tab_ws()
         if ws:
@@ -187,7 +207,18 @@ def browser_click(selector=None, text=None):
     if not selector and not text:
         return "Provide a CSS selector or visible text to click."
 
-    # Try CDP
+    # Tier 0: Playwright
+    if _HAS_PLAYWRIGHT:
+        try:
+            pw = get_playwright_session()
+            pw.connect()
+            pw.click(selector=selector, text=text)
+            target = selector or text
+            return f"CLICKED: {target}"
+        except Exception as e:
+            logger.debug(f"Playwright click failed, falling back to CDP: {e}")
+
+    # Tier 1: CDP
     if _check_cdp():
         ws = _get_active_tab_ws()
         if ws:
@@ -251,7 +282,27 @@ def browser_fill(selector=None, text="", field_name=None):
     if not selector and not field_name:
         return "Provide a CSS selector or field name."
 
-    # Try CDP
+    # Tier 0: Playwright
+    if _HAS_PLAYWRIGHT:
+        try:
+            pw = get_playwright_session()
+            pw.connect()
+            target_selector = selector
+            if not target_selector and field_name:
+                # Playwright can find by placeholder, label, or name attribute
+                target_selector = (
+                    f"input[name='{field_name}'], "
+                    f"input[placeholder*='{field_name}' i], "
+                    f"textarea[name='{field_name}'], "
+                    f"textarea[placeholder*='{field_name}' i]"
+                )
+            if target_selector:
+                pw.fill(target_selector, text)
+                return f"FILLED: {field_name or selector}"
+        except Exception as e:
+            logger.debug(f"Playwright fill failed, falling back to CDP: {e}")
+
+    # Tier 1: CDP
     if _check_cdp():
         ws = _get_active_tab_ws()
         if ws:
@@ -320,7 +371,18 @@ def browser_read(selector=None):
     Returns:
         str: Page text content (truncated to 3000 chars).
     """
-    # Try CDP
+    # Tier 0: Playwright
+    if _HAS_PLAYWRIGHT:
+        try:
+            pw = get_playwright_session()
+            pw.connect()
+            text = pw.get_text(selector)
+            if text:
+                return text[:3000]
+        except Exception as e:
+            logger.debug(f"Playwright read failed, falling back to CDP: {e}")
+
+    # Tier 1: CDP
     if _check_cdp():
         ws = _get_active_tab_ws()
         if ws:
@@ -384,6 +446,18 @@ def browser_run_js(script):
         if d.lower() in script_lower:
             return f"Blocked: script contains '{d}' which is restricted."
 
+    # Tier 0: Playwright
+    if _HAS_PLAYWRIGHT:
+        try:
+            pw = get_playwright_session()
+            pw.connect()
+            result = pw.run_js(script)
+            if result is not None:
+                return str(result)[:2000]
+            return "Script executed (no return value)."
+        except Exception as e:
+            logger.debug(f"Playwright run_js failed, falling back to CDP: {e}")
+
     if not _check_cdp():
         return "CDP not available. Start Chrome with --remote-debugging-port=9222"
 
@@ -411,7 +485,18 @@ def browser_get_url():
     Returns:
         str: Current URL, or empty string if unavailable.
     """
-    # Try CDP
+    # Tier 0: Playwright
+    if _HAS_PLAYWRIGHT:
+        try:
+            pw = get_playwright_session()
+            pw.connect()
+            url = pw.get_url()
+            if url:
+                return url
+        except Exception as e:
+            logger.debug(f"Playwright get_url failed: {e}")
+
+    # Tier 1: CDP
     if _check_cdp():
         tabs = _get_tabs()
         if tabs:
@@ -454,7 +539,19 @@ def browser_get_tabs():
     Returns:
         list of dicts with title and url.
     """
-    # Try CDP
+    # Tier 0: Playwright
+    if _HAS_PLAYWRIGHT:
+        try:
+            pw = get_playwright_session()
+            pw.connect()
+            tabs = pw.get_tabs()
+            if tabs:
+                return [{"title": t.get("title", ""), "url": t.get("url", "")}
+                        for t in tabs]
+        except Exception as e:
+            logger.debug(f"Playwright get_tabs failed: {e}")
+
+    # Tier 1: CDP
     if _check_cdp():
         tabs = _get_tabs()
         return [{"title": t.get("title", ""), "url": t.get("url", "")}
@@ -488,7 +585,28 @@ def browser_switch_tab(index=None, title=None):
     Returns:
         str: Result message.
     """
-    # Try CDP
+    # Tier 0: Playwright
+    if _HAS_PLAYWRIGHT:
+        try:
+            pw = get_playwright_session()
+            pw.connect()
+            if title:
+                # Find tab by title match
+                tabs = pw.get_tabs()
+                title_lower = title.lower()
+                for i, t in enumerate(tabs):
+                    if title_lower in t.get("title", "").lower():
+                        pw.switch_tab(i)
+                        return f"Switched to tab: {t['title'][:50]}"
+            elif index is not None:
+                pw.switch_tab(index)
+                tabs = pw.get_tabs()
+                tab_title = tabs[index]["title"] if index < len(tabs) else ""
+                return f"Switched to tab {index}: {tab_title[:50]}"
+        except Exception as e:
+            logger.debug(f"Playwright switch_tab failed: {e}")
+
+    # Tier 1: CDP
     if _check_cdp():
         tabs = _get_tabs()
         if title:
@@ -586,7 +704,58 @@ def browser_snapshot():
     """
     snapshot = {"url": "", "title": "", "links": [], "inputs": [], "buttons": []}
 
-    # Try CDP
+    # Tier 0: Playwright
+    if _HAS_PLAYWRIGHT:
+        try:
+            pw = get_playwright_session()
+            pw.connect()
+            snapshot["url"] = pw.get_url()
+            snapshot["title"] = pw.get_title()
+
+            # Use Playwright's JS evaluation for structured extraction
+            js = """
+            (() => {
+                const result = {links: [], inputs: [], buttons: []};
+
+                // Links (first 15)
+                const links = document.querySelectorAll('a[href]');
+                for (let i = 0; i < Math.min(links.length, 15); i++) {
+                    const a = links[i];
+                    const text = (a.textContent || '').trim().substring(0, 60);
+                    if (text) result.links.push({text, href: a.href.substring(0, 100)});
+                }
+
+                // Inputs (first 10)
+                const inputs = document.querySelectorAll('input, textarea, select');
+                for (let i = 0; i < Math.min(inputs.length, 10); i++) {
+                    const inp = inputs[i];
+                    result.inputs.push({
+                        type: inp.type || inp.tagName.toLowerCase(),
+                        name: inp.name || inp.id || inp.getAttribute('placeholder') || '',
+                        value: (inp.value || '').substring(0, 50),
+                    });
+                }
+
+                // Buttons (first 10)
+                const btns = document.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]');
+                for (let i = 0; i < Math.min(btns.length, 10); i++) {
+                    const btn = btns[i];
+                    result.buttons.push({
+                        text: (btn.textContent || btn.value || '').trim().substring(0, 40),
+                    });
+                }
+
+                return result;
+            })()
+            """
+            parsed = pw.run_js(js)
+            if parsed and isinstance(parsed, dict):
+                snapshot.update(parsed)
+            return snapshot
+        except Exception as e:
+            logger.debug(f"Playwright snapshot failed, falling back to CDP: {e}")
+
+    # Tier 1: CDP
     if _check_cdp():
         ws = _get_active_tab_ws()
         if ws:
@@ -659,8 +828,26 @@ def is_browser_active():
         return False
 
 
+def is_playwright_available():
+    """Check if Playwright is installed and a browser is reachable."""
+    if not _HAS_PLAYWRIGHT:
+        return False
+    try:
+        pw = get_playwright_session()
+        return pw.is_browser_available()
+    except Exception:
+        return False
+
+
 def is_cdp_available():
-    """Check if Chrome DevTools Protocol is accessible."""
+    """Check if Chrome DevTools Protocol is accessible (or Playwright)."""
+    if _HAS_PLAYWRIGHT:
+        try:
+            pw = get_playwright_session()
+            if pw.is_browser_available():
+                return True
+        except Exception:
+            pass
     return _check_cdp()
 
 

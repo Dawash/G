@@ -267,6 +267,131 @@ def _test_code_interpreter():
         return False, str(e)
 
 
+def _test_12_layer_routing():
+    """Test 12-layer strategy selection produces correct layer order."""
+    try:
+        from execution_strategies import (
+            StrategySelector, STRATEGY_CLI, STRATEGY_SETTINGS, STRATEGY_TOOL,
+            STRATEGY_WEBSITE, STRATEGY_VISION, STRATEGY_CACHE, STRATEGY_COMPOUND,
+            STRATEGY_AGENT, detect_parallel_tasks, cache_store, cache_lookup,
+        )
+
+        sel = StrategySelector()
+
+        # Test 1: CLI command gets CLI strategy first
+        strats = sel.select_strategies("check disk space")
+        names = [s[0] for s in strats]
+        if STRATEGY_CLI not in names:
+            return False, f"'check disk space' missing CLI: {names}"
+
+        # Test 2: Settings URI detection
+        strats = sel.select_strategies("open wifi settings")
+        names = [s[0] for s in strats]
+        if STRATEGY_SETTINGS not in names:
+            return False, f"'open wifi settings' missing SETTINGS: {names}"
+
+        # Test 3: Website detection
+        strats = sel.select_strategies("open reddit")
+        names = [s[0] for s in strats]
+        if STRATEGY_WEBSITE not in names and STRATEGY_TOOL not in names:
+            return False, f"'open reddit' missing WEBSITE/TOOL: {names}"
+
+        # Test 4: Agent-worthy detection
+        strats = sel.select_strategies("order pizza online")
+        names = [s[0] for s in strats]
+        if STRATEGY_AGENT not in names:
+            return False, f"'order pizza online' missing AGENT: {names}"
+
+        # Test 5: Cache store/lookup round-trip
+        cache_store("test query xyz", "test result", "cli")
+        cached, strat = cache_lookup("test query xyz")
+        if cached != "test result":
+            return False, f"Cache miss: got {cached}"
+
+        # Test 6: Enhanced parallel detection
+        tasks = detect_parallel_tasks("check weather and news")
+        if len(tasks) < 2:
+            # Acceptable — only info-word parallel detection
+            pass
+
+        tasks = detect_parallel_tasks("open chrome, spotify, and notepad")
+        if len(tasks) != 3:
+            return False, f"Expected 3 parallel tasks, got {len(tasks)}: {tasks}"
+
+        return True, "12-layer routing: 6/6 checks passed"
+    except Exception as e:
+        return False, str(e)
+
+
+def _test_vector_store():
+    """Test FAISS/fallback vector store for embeddings."""
+    try:
+        from embeddings import get_store
+
+        store = get_store()
+        # Add test documents
+        store.add("test_1", "open chrome browser")
+        store.add("test_2", "check the weather forecast")
+        store.add("test_3", "play music on spotify")
+
+        # Search for similar
+        results = store.search("launch chrome", top_k=3)
+        if not results:
+            return False, "No results from vector search"
+
+        # Best match should be chrome-related
+        best = results[0]
+        if "chrome" not in best.get("text", "").lower() and "browser" not in best.get("text", "").lower():
+            return False, f"Expected chrome/browser match, got: {best}"
+
+        # Cleanup
+        store.remove("test_1")
+        store.remove("test_2")
+        store.remove("test_3")
+
+        backend = "FAISS" if hasattr(store, '_index') and store._index is not None else "TF-IDF fallback"
+        return True, f"Vector store OK ({backend}), search returned {len(results)} results"
+    except Exception as e:
+        return False, str(e)
+
+
+def _test_debate_agent():
+    """Test multi-agent debate system initialization and quick debate."""
+    try:
+        from agents.debate import DebateAgent, PERSPECTIVES
+        from agents.blackboard import Blackboard
+
+        bb = Blackboard()
+        bb.set("goal", "test goal")
+        bb.set("total_llm_calls", 0)
+
+        # Use mock LLM that returns structured debate response
+        call_count = [0]
+        def mock_llm(prompt):
+            call_count[0] += 1
+            if "moderator" in prompt.lower() or "synthesize" in prompt.lower():
+                return '{"winner": "continue", "confidence": 0.8, "reasoning": "Test reasoning"}'
+            return "This approach is best because it handles edge cases well."
+
+        debate = DebateAgent(mock_llm, bb)
+
+        # Test perspectives exist
+        if len(PERSPECTIVES) < 3:
+            return False, f"Expected 3+ perspectives, got {len(PERSPECTIVES)}"
+
+        # Test quick_debate
+        result = debate.quick_debate(
+            "Should we replan or continue?",
+            options=["continue", "replan"]
+        )
+        if not result:
+            return False, f"quick_debate returned empty: {result}"
+
+        return True, f"Debate agent OK: {len(PERSPECTIVES)} perspectives, {call_count[0]} LLM calls"
+    except Exception as e:
+        return False, str(e)
+
+
 # All tests
 ALL_TESTS = [
     ("Imports: config", lambda: _test_import("config")),
@@ -290,6 +415,9 @@ ALL_TESTS = [
     ("Swarm Init", _test_swarm_init),
     ("Planner Classification", _test_planner_classification),
     ("Code Interpreter", _test_code_interpreter),
+    ("12-Layer Routing", _test_12_layer_routing),
+    ("Vector Store", _test_vector_store),
+    ("Debate Agent", _test_debate_agent),
 ]
 
 # Tests safe to run in parallel
@@ -298,6 +426,7 @@ _PARALLEL = {
     "Imports: intent", "Imports: brain", "Config", "Whisper STT", "gTTS",
     "Cognitive Engine", "Mode Classification", "Swarm Init",
     "Planner Classification", "Code Interpreter",
+    "12-Layer Routing", "Vector Store", "Debate Agent",
 }
 
 

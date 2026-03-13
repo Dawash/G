@@ -137,6 +137,17 @@ class OllamaProvider(ChatProvider):
         self.model = model
         self.ollama_url = (ollama_url or self.DEFAULT_BASE_URL).rstrip("/")
 
+    def _get_timeout(self, warm=False):
+        """Get timeout based on model size. Larger models need more time."""
+        model_lower = self.model.lower()
+        if "72b" in model_lower or "70b" in model_lower:
+            return 300 if not warm else 600
+        if "32b" in model_lower or "34b" in model_lower:
+            return 180 if not warm else 300
+        if "14b" in model_lower or "13b" in model_lower:
+            return 90 if not warm else 150
+        return 60 if not warm else 120  # 7b and smaller
+
     def _call_api(self):
         # Try native Ollama endpoint first (works on all versions)
         # Falls back to OpenAI-compatible /v1/ if native fails
@@ -144,6 +155,7 @@ class OllamaProvider(ChatProvider):
             {"role": "system", "content": self.system_prompt},
             *self.messages,
         ]
+        timeout = self._get_timeout()
         try:
             response = requests.post(
                 f"{self.ollama_url}/api/chat",
@@ -152,7 +164,7 @@ class OllamaProvider(ChatProvider):
                     "messages": messages,
                     "stream": False,
                 },
-                timeout=60,
+                timeout=timeout,
             )
             response.raise_for_status()
             data = response.json()
@@ -165,7 +177,7 @@ class OllamaProvider(ChatProvider):
                     "model": self.model,
                     "messages": messages,
                 },
-                timeout=60,
+                timeout=timeout,
             )
             response.raise_for_status()
             data = response.json()

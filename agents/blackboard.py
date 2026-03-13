@@ -12,12 +12,19 @@ works with any LLM size. No vector DB needed.
 
 import json
 import logging
+import os
 import threading
 import time
 import math
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
+
+try:
+    from embeddings import VectorStore
+    _HAS_VECTOR_STORE = True
+except ImportError:
+    _HAS_VECTOR_STORE = False
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +84,19 @@ class Blackboard:
         self._doc_index = {}   # doc_id -> {tokens: {term: tf}, text: str}
         self._idf_cache = {}
         self._doc_counter = 0
+        # Vector store for semantic retrieval (enhancement over TF-IDF)
+        self._vectors = None
+        if _HAS_VECTOR_STORE:
+            try:
+                _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                self._vectors = VectorStore(
+                    persist_dir=_base,
+                    prefix="blackboard_vectors",
+                )
+                logger.debug("Blackboard: VectorStore initialized")
+            except Exception as e:
+                logger.warning(f"Blackboard: VectorStore init failed: {e}")
+                self._vectors = None
 
     # --- Core State Access ---
 
@@ -237,7 +257,7 @@ class Blackboard:
     # --- TF-IDF Vector Memory (for semantic retrieval) ---
 
     def index_document(self, doc_id: str, text: str):
-        """Add a document to the TF-IDF index."""
+        """Add a document to the TF-IDF index (and vector store if available)."""
         tokens = _tokenize(text)
         if not tokens:
             return
@@ -252,9 +272,31 @@ class Blackboard:
             self._doc_index[doc_id] = {"tokens": dict(tf), "text": text}
             self._idf_cache.clear()  # Invalidate
             self._doc_counter += 1
+        # Also add to vector store for semantic search
+        if self._vectors is not None:
+            try:
+                self._vectors.add(doc_id, text)
+            except Exception as e:
+                logger.debug(f"Blackboard VectorStore add failed for '{doc_id}': {e}")
 
     def search_similar(self, query: str, top_k: int = 3) -> list:
-        """Find documents most similar to query (TF-IDF cosine)."""
+        """Find documents most similar to query.
+
+        Tries FAISS vector search first, falls back to TF-IDF cosine.
+        """
+        if not query:
+            return []
+
+        # Try vector search first
+        if self._vectors is not None:
+            try:
+                vec_results = self._vectors.search(query, top_k=top_k, min_similarity=0.1)
+                if vec_results:
+                    return vec_results
+            except Exception as e:
+                logger.debug(f"Blackboard vector search failed, falling back to TF-IDF: {e}")
+
+        # Fall back to TF-IDF
         query_tokens = _tokenize(query)
         if not query_tokens:
             return []

@@ -32,6 +32,12 @@ import threading
 import time
 from collections import Counter
 
+try:
+    from embeddings import VectorStore
+    _HAS_VECTOR_STORE = True
+except ImportError:
+    _HAS_VECTOR_STORE = False
+
 logger = logging.getLogger(__name__)
 
 DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory.db")
@@ -110,6 +116,18 @@ class SkillLibrary:
         self._db_path = db_path
         self._conn = self._get_db()
         self._init_tables()
+        # Initialize vector store for semantic search
+        self._vectors = None
+        if _HAS_VECTOR_STORE:
+            try:
+                self._vectors = VectorStore(
+                    persist_dir=os.path.dirname(os.path.abspath(db_path)),
+                    prefix="skill_vectors",
+                )
+                logger.debug("SkillLibrary: VectorStore initialized")
+            except Exception as e:
+                logger.warning(f"SkillLibrary: VectorStore init failed: {e}")
+                self._vectors = None
         # Auto-cleanup stale skills on load
         try:
             self.cleanup()
@@ -442,6 +460,17 @@ class SkillLibrary:
                     json.dumps(depends_on or []),
                 ))
                 self._conn.commit()
+                # Index in vector store for semantic search
+                if self._vectors is not None:
+                    try:
+                        self._vectors.add(
+                            name,
+                            f"{goal} {description}",
+                            {"category": category or "general",
+                             "tags": tags or []},
+                        )
+                    except Exception as ve:
+                        logger.debug(f"VectorStore add failed for '{name}': {ve}")
                 logger.info(f"Skill saved: {name} ({len(tool_sequence)} steps, "
                             f"category={category})")
                 return f"Skill '{name}' saved ({len(tool_sequence)} steps)"
@@ -474,7 +503,62 @@ class SkillLibrary:
                 m["similarity"] = min(1.0, m.get("similarity", 0.7) + 0.3)
             return trigger_matches[:limit]
 
-        # Phase 2: Fall back to TF-IDF similarity
+        # Phase 2: Try vector search (FAISS + sentence-transformers)
+        if self._vectors is not None:
+            try:
+                vec_results = self._vectors.search(
+                    goal, top_k=limit * 2, min_similarity=min_similarity
+                )
+                if vec_results:
+                    # Enrich vector results with full skill data from DB
+                    enriched = []
+                    for vr in vec_results:
+                        skill_name = vr["id"]
+                        with _db_lock:
+                            c = self._conn.cursor()
+                            c.execute("""
+                                SELECT name, description, goal, tool_sequence, tags,
+                                       success_count, fail_count, avg_duration,
+                                       parent_skills, category, version
+                                FROM skills WHERE name = ?
+                            """, (skill_name,))
+                            row = c.fetchone()
+                        if not row:
+                            continue
+                        # Skip skills with poor success rate
+                        if row["success_count"] <= row["fail_count"]:
+                            continue
+                        sim = vr["similarity"]
+                        # Boost for high success count
+                        if row["success_count"] > 5:
+                            sim *= 1.1
+                        # Penalty for failures
+                        total = row["success_count"] + row["fail_count"]
+                        if total > 0:
+                            success_rate = row["success_count"] / total
+                            sim *= (0.5 + 0.5 * success_rate)
+                        if sim >= min_similarity:
+                            enriched.append({
+                                "name": row["name"],
+                                "description": row["description"],
+                                "goal": row["goal"],
+                                "tool_sequence": json.loads(row["tool_sequence"]),
+                                "tags": json.loads(row["tags"]) if row["tags"] else [],
+                                "similarity": round(sim, 3),
+                                "success_count": row["success_count"],
+                                "fail_count": row["fail_count"],
+                                "avg_duration": row["avg_duration"],
+                                "parent_skills": json.loads(row["parent_skills"]) if row["parent_skills"] else [],
+                                "category": row["category"] or "general",
+                                "version": row["version"] or 1,
+                            })
+                    if enriched:
+                        enriched.sort(key=lambda x: x["similarity"], reverse=True)
+                        return enriched[:limit]
+            except Exception as e:
+                logger.debug(f"Vector search failed, falling back to TF-IDF: {e}")
+
+        # Phase 3: Fall back to TF-IDF similarity
         query_tokens = _tokenize(goal)
         if not query_tokens:
             return []
@@ -820,14 +904,29 @@ class SkillLibrary:
         """Remove old, unused, or consistently failing skills."""
         cutoff = time.time() - (max_age_days * 86400)
         total_deleted = 0
+        # Collect names of skills that will be deleted (for vector store cleanup)
+        _to_remove_names = []
         with _db_lock:
             c = self._conn.cursor()
+            # Collect names before deletion for vector store cleanup
+            c.execute("""
+                SELECT name FROM skills
+                WHERE fail_count > success_count * 2 AND fail_count >= 3
+            """)
+            _to_remove_names.extend(row["name"] for row in c.fetchall())
             # Remove skills that consistently fail
             c.execute("""
                 DELETE FROM skills
                 WHERE fail_count > success_count * 2 AND fail_count >= 3
             """)
             total_deleted += c.rowcount
+
+            c.execute("""
+                SELECT name FROM skills
+                WHERE last_used_at IS NOT NULL AND last_used_at < ?
+                  AND success_count <= ?
+            """, (cutoff, min_success))
+            _to_remove_names.extend(row["name"] for row in c.fetchall())
             # Remove very old unused skills
             c.execute("""
                 DELETE FROM skills
@@ -835,8 +934,14 @@ class SkillLibrary:
                   AND success_count <= ?
             """, (cutoff, min_success))
             total_deleted += c.rowcount
-            # Remove never-successful skills older than 7 days
+
             stale_cutoff = time.time() - (7 * 86400)
+            c.execute("""
+                SELECT name FROM skills
+                WHERE success_count = 0 AND created_at < ?
+            """, (stale_cutoff,))
+            _to_remove_names.extend(row["name"] for row in c.fetchall())
+            # Remove never-successful skills older than 7 days
             c.execute("""
                 DELETE FROM skills
                 WHERE success_count = 0 AND created_at < ?
@@ -850,3 +955,11 @@ class SkillLibrary:
             self._conn.commit()
             if total_deleted:
                 logger.info(f"Skill cleanup: removed {total_deleted} stale skills")
+
+        # Remove cleaned-up skills from vector store
+        if self._vectors is not None and _to_remove_names:
+            for name in _to_remove_names:
+                try:
+                    self._vectors.remove(name)
+                except Exception as ve:
+                    logger.debug(f"VectorStore remove failed for '{name}': {ve}")

@@ -1,13 +1,19 @@
 """
-Execution Strategy Selector — multi-layer task execution routing.
+Execution Strategy Selector — 12-layer task execution routing.
 
 Routes each task step to the fastest reliable execution method:
-  1. CLI    — PowerShell/CMD for system operations (0.5s)
-  2. API    — Direct service API calls (1-2s)
-  3. TOOL   — Brain tools like open_app, get_weather (0.5s)
-  4. UIA    — Windows Accessibility tree for desktop apps (0.2s)
-  5. CDP    — Chrome DevTools Protocol for browser (1s)
-  6. VISION — Screenshot + LLM analysis (5-10s, last resort)
+  1.  CACHE     — Replay cached results for identical recent requests (0ms)
+  2.  CLI       — PowerShell/CMD for system operations (0.5s)
+  3.  SETTINGS  — ms-settings: URI fast-path for Windows settings (0.3s)
+  4.  API       — Direct service API calls: Spotify URI, etc. (1-2s)
+  5.  WEBSITE   — Known website navigation via CDP/Playwright (1s)
+  6.  TOOL      — Brain tools like open_app, get_weather (0.5s)
+  7.  COM       — Win32 COM for Office apps (0.5s)
+  8.  UIA       — Windows Accessibility tree for desktop apps (0.2s)
+  9.  CDP       — Chrome DevTools / Playwright for browser (1s)
+  10. COMPOUND  — Chain multiple strategies for multi-step intents (varies)
+  11. AGENT     — Full desktop agent with vision loop (5-30s)
+  12. VISION    — Screenshot + LLM analysis (5-10s, last resort)
 
 Used by desktop_agent.py and brain.py to pick the optimal execution path.
 """
@@ -21,16 +27,67 @@ import time
 
 logger = logging.getLogger(__name__)
 
-# Strategy constants
+# Strategy constants — 12 layers
+STRATEGY_CACHE = "cache"
 STRATEGY_CLI = "cli"
+STRATEGY_SETTINGS = "settings"
 STRATEGY_API = "api"
+STRATEGY_WEBSITE = "website"
 STRATEGY_TOOL = "tool"
+STRATEGY_COM = "com"
 STRATEGY_UIA = "uia"
 STRATEGY_CDP = "cdp"
+STRATEGY_COMPOUND = "compound"
+STRATEGY_AGENT = "agent"
 STRATEGY_VISION = "vision"
 
-# Priority order (fastest → slowest)
-STRATEGY_ORDER = [STRATEGY_CLI, STRATEGY_API, STRATEGY_TOOL, STRATEGY_UIA, STRATEGY_CDP, STRATEGY_VISION]
+# Priority order (fastest -> slowest, 12 layers)
+STRATEGY_ORDER = [
+    STRATEGY_CACHE, STRATEGY_CLI, STRATEGY_SETTINGS, STRATEGY_API,
+    STRATEGY_WEBSITE, STRATEGY_TOOL, STRATEGY_COM, STRATEGY_UIA,
+    STRATEGY_CDP, STRATEGY_COMPOUND, STRATEGY_AGENT, STRATEGY_VISION,
+]
+
+# ===================================================================
+# LAYER 1: Cache Strategy — replay identical recent results
+# ===================================================================
+
+import threading as _threading
+
+_result_cache = {}        # key -> (result, timestamp, strategy)
+_result_cache_lock = _threading.Lock()
+_CACHE_TTL = 30.0         # seconds — cache results for 30s
+_CACHE_MAX_SIZE = 50      # max cached entries
+
+def _cache_key(text):
+    """Normalize text for cache lookup."""
+    return text.lower().strip()
+
+def cache_lookup(text):
+    """Check if we have a cached result for this exact request.
+    Returns (result_str, strategy_name) or (None, None).
+    """
+    key = _cache_key(text)
+    with _result_cache_lock:
+        entry = _result_cache.get(key)
+        if entry:
+            result, ts, strategy = entry
+            if time.time() - ts < _CACHE_TTL:
+                logger.debug(f"Cache hit for: {text[:40]}")
+                return (result, f"cache({strategy})")
+            else:
+                del _result_cache[key]
+    return (None, None)
+
+def cache_store(text, result, strategy):
+    """Store a successful result in cache."""
+    key = _cache_key(text)
+    with _result_cache_lock:
+        # Evict oldest if full
+        if len(_result_cache) >= _CACHE_MAX_SIZE:
+            oldest_key = min(_result_cache, key=lambda k: _result_cache[k][1])
+            del _result_cache[oldest_key]
+        _result_cache[key] = (result, time.time(), strategy)
 
 
 # ===================================================================
@@ -957,17 +1014,25 @@ def execute_split_screen(app1, app2, action_registry=None):
 def detect_parallel_tasks(text):
     """Detect multiple independent tasks that can run in parallel.
 
+    Enhanced patterns:
+    - "open X, Y, and Z" (parallel launch)
+    - "close X, Y, and Z" (parallel close)
+    - "open chrome and open notepad" (repeated verbs)
+    - "minimize all except chrome" (batch operations)
+    - "check weather and news" (independent queries)
+    - "get weather, time, and battery" (independent info)
+    - "search for X on google and Y on youtube" (independent searches)
+
     Returns list of task descriptions, or empty list if not parallelizable.
     """
     lower = text.lower().strip()
 
-    # "open X, Y, and Z" — but NOT "open X and go to/search/navigate/play"
+    # "open X, Y, and Z" -- but NOT "open X and go to/search/navigate/play"
     # Those are sequential compound intents, not parallel.
     if not re.search(r"\band\s+(?:go\s+to|navigate|search|play|find|type|click|fill)", lower):
         m = re.match(r"^(?:open|launch|start)\s+(.+)$", lower)
         if m:
             rest = m.group(1)
-            # Split by "and" / "," combinations
             parts = re.split(r"\s*,\s*(?:and\s+)?|\s+and\s+", rest)
             if len(parts) >= 2:
                 return [f"open {p.strip()}" for p in parts if p.strip()]
@@ -985,40 +1050,139 @@ def detect_parallel_tasks(text):
     if len(m) >= 2:
         return m
 
+    # "check/get X, Y, and Z" — independent information queries
+    m = re.match(r"^(?:check|get|show|tell me|what(?:'s| is))\s+(?:the\s+)?(.+)$", lower)
+    if m:
+        rest = m.group(1)
+        parts = re.split(r"\s*,\s*(?:and\s+)?|\s+and\s+(?:the\s+)?", rest)
+        if len(parts) >= 2:
+            # Only parallelize if each part maps to an independent query
+            _INFO_WORDS = {"weather", "time", "date", "battery", "news", "reminders",
+                           "cpu", "ram", "disk", "temperature", "forecast", "ip"}
+            if all(any(w in p for w in _INFO_WORDS) for p in parts):
+                verb = "check" if "check" in lower else "get"
+                return [f"{verb} {p.strip()}" for p in parts if p.strip()]
+
+    # "search for X on google and Y on youtube" — independent searches
+    searches = re.findall(
+        r"(?:search|look up|find)\s+(?:for\s+)?(.+?)\s+on\s+(\w+)", lower)
+    if len(searches) >= 2:
+        return [f"search for {q} on {site}" for q, site in searches]
+
     return []
 
 
-def execute_parallel_tools(tasks, action_registry=None):
+class ParallelExecutor:
+    """Enhanced parallel task executor with progress tracking and cancellation."""
+
+    def __init__(self, max_workers=4, timeout_per_task=30):
+        self.max_workers = max_workers
+        self.timeout_per_task = timeout_per_task
+        self._cancel_event = _threading.Event()
+        self._progress = []  # [(task_desc, status, result)]
+        self._progress_lock = _threading.Lock()
+
+    def cancel(self):
+        """Cancel all running tasks."""
+        self._cancel_event.set()
+
+    def execute(self, tasks, action_registry=None, progress_callback=None):
+        """Execute tasks in parallel with progress tracking.
+
+        Args:
+            tasks: list of {"tool": name, "args": dict} or list of step strings
+            action_registry: brain action registry
+            progress_callback: Optional fn(task_desc, status, result) called on completion
+
+        Returns: list of (tool, args, result) in input order
+        """
+        if not tasks:
+            return []
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        self._cancel_event.clear()
+        self._progress = []
+
+        def run_one(idx, task):
+            if self._cancel_event.is_set():
+                return (idx, task.get("tool", ""), task.get("args", {}), "Cancelled")
+
+            tool = task.get("tool", "")
+            args = task.get("args", {})
+            desc = f"{tool}({args.get('name', args.get('query', ''))})"
+
+            with self._progress_lock:
+                self._progress.append((desc, "running", None))
+
+            try:
+                from brain import execute_tool
+                result = execute_tool(tool, args, action_registry or {})
+                result_str = str(result)[:200]
+
+                with self._progress_lock:
+                    for i, (d, s, r) in enumerate(self._progress):
+                        if d == desc and s == "running":
+                            self._progress[i] = (desc, "done", result_str)
+                            break
+
+                if progress_callback:
+                    try:
+                        progress_callback(desc, "done", result_str)
+                    except Exception:
+                        pass
+
+                return (idx, tool, args, result_str)
+            except Exception as e:
+                err = f"Error: {e}"
+                with self._progress_lock:
+                    for i, (d, s, r) in enumerate(self._progress):
+                        if d == desc and s == "running":
+                            self._progress[i] = (desc, "error", err)
+                            break
+                return (idx, tool, args, err)
+
+        results = [None] * len(tasks)
+        with ThreadPoolExecutor(max_workers=min(len(tasks), self.max_workers)) as pool:
+            futures = {pool.submit(run_one, i, t): i for i, t in enumerate(tasks)}
+            for f in as_completed(futures, timeout=self.timeout_per_task * len(tasks)):
+                try:
+                    idx, tool, args, result = f.result(timeout=self.timeout_per_task)
+                    results[idx] = (tool, args, result)
+                except Exception as e:
+                    i = futures[f]
+                    t = tasks[i]
+                    results[i] = (t.get("tool", ""), t.get("args", {}), f"Timeout: {e}")
+
+        # Fill any None entries (shouldn't happen but safety)
+        for i, r in enumerate(results):
+            if r is None:
+                t = tasks[i]
+                results[i] = (t.get("tool", ""), t.get("args", {}), "Failed: no result")
+
+        return results
+
+    def get_progress(self):
+        """Get current progress snapshot."""
+        with self._progress_lock:
+            return list(self._progress)
+
+
+# Module-level parallel executor
+_parallel_executor = ParallelExecutor()
+
+
+def execute_parallel_tools(tasks, action_registry=None, progress_callback=None):
     """Execute multiple independent tool calls in parallel.
 
     Args:
         tasks: list of {"tool": name, "args": dict}
         action_registry: brain action registry
+        progress_callback: Optional fn(desc, status, result) for streaming progress
 
-    Returns: list of (tool, args, result)
+    Returns: list of (tool, args, result) in input order (not completion order)
     """
-    if not tasks:
-        return []
-
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    def run_one(task):
-        tool = task.get("tool", "")
-        args = task.get("args", {})
-        try:
-            from brain import execute_tool
-            result = execute_tool(tool, args, action_registry or {})
-            return (tool, args, str(result)[:200])
-        except Exception as e:
-            return (tool, args, f"Error: {e}")
-
-    results = []
-    with ThreadPoolExecutor(max_workers=min(len(tasks), 4)) as pool:
-        futures = {pool.submit(run_one, t): t for t in tasks}
-        for f in as_completed(futures):
-            results.append(f.result())
-
-    return results
+    return _parallel_executor.execute(tasks, action_registry, progress_callback)
 
 
 # ===================================================================
@@ -1138,6 +1302,27 @@ def _resolve_pronouns(text, context):
             return None, {"_strategy": STRATEGY_CDP, "action": "refresh", "params": {}}
 
     return text, None
+
+
+# ===================================================================
+# LAYER 11: Agent-worthy detection — tasks needing full observation loop
+# ===================================================================
+
+_AGENT_PATTERNS = re.compile(
+    r'\b(?:order|book|buy|purchase|fill\s+out|sign\s+up|register|log\s*in|checkout)\b.*'
+    r'\b(?:online|form|account|pizza|food|ticket|hotel|flight)\b|'
+    r'\b(?:play|search|find)\b.+\b(?:on\s+)?(?:spotify|youtube)\b|'
+    r'\b(?:spotify|youtube)\b.+\b(?:play|search|find)\b|'
+    r'\b(?:compose|write|draft|send)\s+(?:an?\s+)?(?:email|message|tweet|post)\b|'
+    r'\b(?:download|upload|transfer)\b.+\b(?:file|document|photo|video)\b',
+    re.I,
+)
+
+def _is_agent_worthy(text):
+    """Check if task needs the full desktop agent with observation loop.
+    These are complex UI tasks that need observe->think->act->verify.
+    """
+    return bool(_AGENT_PATTERNS.search(text))
 
 
 # ===================================================================
@@ -1336,27 +1521,30 @@ class StrategySelector:
     """
 
     def select_strategies(self, step_description, context=None):
-        """Rank execution strategies for a step.
+        """Rank execution strategies for a step using 12-layer routing.
 
         Uses context (active window, browser state, etc.) to make smarter
         ordering decisions. Falls back to static ordering when no context.
+
+        12 layers (fastest -> slowest):
+          1. CACHE     — replay cached results for identical recent requests
+          2. CLI       — PowerShell/CMD for system operations
+          3. SETTINGS  — ms-settings: URI fast-path
+          4. API       — Direct service API calls (Spotify, YouTube)
+          5. WEBSITE   — Known website navigation
+          6. TOOL      — Brain tools (open_app, weather, etc.)
+          7. COM       — Win32 COM for Office apps
+          8. UIA       — Windows Accessibility tree
+          9. CDP       — Chrome DevTools / Playwright
+          10. COMPOUND — Multi-step intent chains
+          11. AGENT    — Full desktop agent with vision
+          12. VISION   — Screenshot + LLM analysis (last resort)
 
         Returns: list of (strategy_name, data_dict) in priority order.
         """
         strategies = []
         lower = step_description.lower()
         ctx = context or {}
-
-        # --- Pre-check: Settings URI fast-path ---
-        settings_uri = _match_settings_uri(step_description)
-        if settings_uri:
-            strategies.append(("settings", {"uri": settings_uri}))
-            # Still add TOOL as fallback
-            tool_match = match_direct_tool(step_description)
-            if tool_match:
-                strategies.append((STRATEGY_TOOL, tool_match))
-            strategies.append((STRATEGY_VISION, {"step": step_description}))
-            return strategies
 
         # --- Context-aware pre-checks ---
         active_proc = (ctx.get("active_window", {}) or {}).get("process", "").lower()
@@ -1369,32 +1557,40 @@ class StrategySelector:
         # Category for adaptive ordering
         category = _categorize_request(step_description)
 
-        # 1. CLI — system operations (fastest, ~0.5s)
+        # ---- LAYER 1: CACHE — instant replay of identical recent requests ----
+        cached_result, cached_strategy = cache_lookup(step_description)
+        if cached_result is not None:
+            strategies.append((STRATEGY_CACHE, {
+                "result": cached_result, "original_strategy": cached_strategy
+            }))
+            # Still add fallbacks in case cache is stale
+
+        # ---- LAYER 2: CLI — system operations (fastest, ~0.5s) ----
         cli_cmd = match_cli_command(step_description)
         if cli_cmd:
             strategies.append((STRATEGY_CLI, {"command": cli_cmd}))
 
-        # 2. API — direct service API calls (Spotify URI, YouTube CDP, ~1-2s)
+        # ---- LAYER 3: SETTINGS — ms-settings: URI fast-path (~0.3s) ----
+        settings_uri = _match_settings_uri(step_description)
+        if settings_uri:
+            strategies.append((STRATEGY_SETTINGS, {"uri": settings_uri}))
+
+        # ---- LAYER 4: API — direct service calls (Spotify URI, YouTube, ~1-2s) ----
         api_match = match_api_service(step_description)
         if api_match:
             service, params = api_match
-            # Smart: if Spotify isn't running and user wants spotify, still use API
-            # (it will launch Spotify) but if it IS running, API is even faster
             strategies.append((STRATEGY_API, {"service": service, "params": params}))
 
-        # 3. Website detection — "open reddit", "go to gmail" → CDP navigate
+        # ---- LAYER 5: WEBSITE — known website navigation ----
         cdp_website = _match_website_navigation(step_description)
         if cdp_website:
             if cdp_available or browser_running:
-                # Browser is ready — CDP is the best choice
-                strategies.append((STRATEGY_CDP, cdp_website))
+                strategies.append((STRATEGY_WEBSITE, cdp_website))
             else:
-                # No browser — need to open one first, then navigate
-                # Insert open_app("chrome") as a pre-step hint
                 cdp_website["_needs_browser"] = True
-                strategies.append((STRATEGY_CDP, cdp_website))
+                strategies.append((STRATEGY_WEBSITE, cdp_website))
 
-        # 4. TOOL — brain tools (open_app, weather, etc.)
+        # ---- LAYER 6: TOOL — brain tools (open_app, weather, etc.) ----
         tool_match = match_direct_tool(step_description)
         if tool_match:
             tool_name = tool_match.get("tool", "")
@@ -1405,12 +1601,11 @@ class StrategySelector:
                 app_name = tool_args.get("name", "").lower()
                 already_open = any(app_name in p for p in ctx.get("running_processes", set()))
                 if already_open:
-                    # App already running — just focus it instead
                     tool_match = {"tool": "focus_window", "args": {"name": app_name}}
 
             strategies.append((STRATEGY_TOOL, tool_match))
 
-        # 5. COM — Office/system COM automation
+        # ---- LAYER 7: COM — Office/system COM automation ----
         if can_use_com(lower):
             com_app = None
             for app in ["excel", "word", "outlook", "powerpoint"]:
@@ -1419,20 +1614,19 @@ class StrategySelector:
                     break
             if com_app:
                 action = "open" if "open" in lower else "create" if "create" in lower or "new" in lower else "read"
-                strategies.append(("com", {"app": com_app, "action": action}))
+                strategies.append((STRATEGY_COM, {"app": com_app, "action": action}))
 
-        # 6. UIA — desktop UI interaction via accessibility tree
+        # ---- LAYER 8: UIA — desktop UI via accessibility tree ----
         if can_use_uia(step_description, context):
             uia_action, uia_target, uia_window = parse_uia_step(step_description)
             if uia_action:
-                # Smart: if an app is focused, default the window context
                 if not uia_window and active_proc:
-                    uia_window = active_title.split(" - ")[0].split(" — ")[0].strip() or None
+                    uia_window = active_title.split(" - ")[0].split(" -- ")[0].strip() or None
                 strategies.append((STRATEGY_UIA, {
                     "action": uia_action, "target": uia_target, "window": uia_window
                 }))
 
-        # 7. CDP — browser interaction via Chrome DevTools Protocol
+        # ---- LAYER 9: CDP/Playwright — browser automation ----
         if can_use_cdp(step_description, context):
             cdp_action, cdp_params = parse_cdp_step(step_description)
             if cdp_action:
@@ -1440,7 +1634,16 @@ class StrategySelector:
                     "action": cdp_action, "params": cdp_params
                 }))
 
-        # 8. Vision — always available as fallback
+        # ---- LAYER 10: COMPOUND — multi-step intent chains ----
+        compound_steps = detect_compound_intent(step_description)
+        if compound_steps:
+            strategies.append((STRATEGY_COMPOUND, {"steps": compound_steps}))
+
+        # ---- LAYER 11: AGENT — full desktop agent with observation loop ----
+        if _is_agent_worthy(step_description):
+            strategies.append((STRATEGY_AGENT, {"goal": step_description}))
+
+        # ---- LAYER 12: VISION — screenshot + LLM (last resort) ----
         strategies.append((STRATEGY_VISION, {"step": step_description}))
 
         # --- Adaptive reordering: demote strategies that have failed recently ---
@@ -1511,25 +1714,7 @@ class StrategySelector:
             step_description = resolved_text
             logger.info(f"Pronoun resolved: '{step_description}'")
 
-        # --- Compound intent detection ---
-        steps = detect_compound_intent(step_description)
-        if steps:
-            logger.info(f"Compound intent: {steps}")
-            results = []
-            for step in steps:
-                r, s = self.execute_step(step, context, action_registry, skip_vision)
-                if r:
-                    results.append(r)
-                    # Update context: after opening an app, it becomes the active window
-                    try:
-                        context = gather_context()
-                    except Exception:
-                        pass
-            if results:
-                return (" | ".join(results), "compound")
-            return (None, None)
-
-        # --- Main strategy execution ---
+        # --- Main strategy execution (12-layer routing) ---
         category = _categorize_request(step_description)
         strategies = self.select_strategies(step_description, context)
 
@@ -1542,30 +1727,106 @@ class StrategySelector:
                 logger.debug(f"Skipping strategy '{strategy}' (already tried by caller)")
                 continue
 
-            # Settings URI fast-path
-            if strategy == "settings":
-                result = _execute_settings_uri(data["uri"])
-                if result and "failed" not in result.lower():
-                    _record_outcome("settings", category, True)
-                    return (result, "settings")
+            # --- LAYER 1: CACHE — instant replay ---
+            if strategy == STRATEGY_CACHE:
+                cached = data.get("result")
+                if cached:
+                    logger.info(f"Cache hit for: {step_description[:60]}")
+                    return (cached, data.get("original_strategy", "cache"))
                 continue
 
-            # Handle CDP that needs browser opened first
+            # --- LAYER 3: SETTINGS — ms-settings: URI fast-path ---
+            if strategy == STRATEGY_SETTINGS:
+                result = _execute_settings_uri(data["uri"])
+                if result and "failed" not in result.lower():
+                    _record_outcome(STRATEGY_SETTINGS, category, True)
+                    cache_store(step_description, result, STRATEGY_SETTINGS)
+                    return (result, STRATEGY_SETTINGS)
+                continue
+
+            # --- LAYER 5: WEBSITE — known site navigation ---
+            if strategy == STRATEGY_WEBSITE:
+                if data.get("_needs_browser"):
+                    try:
+                        from app_finder import launch_app
+                        launch_app("chrome")
+                        try:
+                            from automation.event_waiter import wait_for_window
+                            wait_for_window("chrome", max_wait=5, interval=0.2)
+                        except ImportError:
+                            time.sleep(2)
+                        data.pop("_needs_browser", None)
+                    except Exception:
+                        pass
+                # Execute as CDP navigation
+                result = self._try_strategy(STRATEGY_CDP, {
+                    "action": data.get("action", "navigate"),
+                    "params": data.get("params", data),
+                }, action_registry)
+                if result is not None:
+                    result_str = str(result)
+                    if not any(w in result_str.lower() for w in ["error:", "failed:", "timed out"]):
+                        _record_outcome(STRATEGY_WEBSITE, category, True)
+                        cache_store(step_description, result_str, STRATEGY_WEBSITE)
+                        return (result_str, STRATEGY_WEBSITE)
+                _record_outcome(STRATEGY_WEBSITE, category, False)
+                continue
+
+            # --- LAYER 10: COMPOUND — multi-step intent chains ---
+            if strategy == STRATEGY_COMPOUND:
+                steps = data.get("steps", [])
+                if steps:
+                    logger.info(f"Compound intent: {steps}")
+                    results = []
+                    for step in steps:
+                        r, s = self.execute_step(step, context, action_registry, skip_vision)
+                        if r:
+                            results.append(r)
+                            try:
+                                context = gather_context()
+                            except Exception:
+                                pass
+                    if results:
+                        combined = " | ".join(results)
+                        cache_store(step_description, combined, STRATEGY_COMPOUND)
+                        return (combined, STRATEGY_COMPOUND)
+                continue
+
+            # --- LAYER 11: AGENT — full desktop agent ---
+            if strategy == STRATEGY_AGENT:
+                try:
+                    from desktop_agent import DesktopAgent
+                    agent = DesktopAgent(
+                        action_registry=action_registry,
+                        speak_fn=lambda msg: None,  # silent
+                    )
+                    result = agent.execute(data["goal"])
+                    if result:
+                        result_str = str(result)
+                        if "error" not in result_str.lower()[:50]:
+                            _record_outcome(STRATEGY_AGENT, category, True)
+                            return (result_str, STRATEGY_AGENT)
+                    _record_outcome(STRATEGY_AGENT, category, False)
+                except Exception as e:
+                    logger.debug(f"Agent strategy failed: {e}")
+                    _record_outcome(STRATEGY_AGENT, category, False)
+                continue
+
+            # Handle CDP/Website that needs browser opened first
             if strategy == STRATEGY_CDP and data.get("_needs_browser"):
                 try:
                     from app_finder import launch_app
                     launch_app("chrome")
-                    # Event-driven wait for browser window instead of fixed sleep
                     try:
                         from automation.event_waiter import wait_for_window
                         wait_for_window("chrome", max_wait=5, interval=0.2)
                     except ImportError:
                         time.sleep(2)
-                    # Remove the hint flag
                     data.pop("_needs_browser", None)
                 except Exception:
                     pass
 
+            # --- Standard strategy execution (CLI, API, TOOL, COM, UIA, CDP, VISION) ---
             result = self._try_strategy(strategy, data, action_registry)
             if result is not None:
                 result_str = str(result)
@@ -1578,6 +1839,7 @@ class StrategySelector:
                 if not has_error and verified:
                     logger.info(f"Strategy '{strategy}' succeeded for: {step_description[:60]}")
                     _record_outcome(strategy, category, True)
+                    cache_store(step_description, result_str, strategy)
                     return (result_str, strategy)
                 else:
                     logger.debug(f"Strategy '{strategy}' failed (verified={verified}): {result_str[:100]}")
@@ -1594,6 +1856,16 @@ class StrategySelector:
             elif strategy == STRATEGY_API:
                 return execute_api(data["service"], data["params"])
 
+            elif strategy == STRATEGY_SETTINGS:
+                return _execute_settings_uri(data.get("uri", ""))
+
+            elif strategy == STRATEGY_WEBSITE:
+                # Website navigation via CDP/Playwright
+                return execute_cdp(
+                    data.get("action", "navigate"),
+                    data.get("params", data),
+                )
+
             elif strategy == STRATEGY_TOOL:
                 tool_name = data.get("tool")
                 tool_args = data.get("args", {})
@@ -1602,7 +1874,7 @@ class StrategySelector:
                     return execute_tool(tool_name, tool_args, action_registry)
                 return None
 
-            elif strategy == "com":
+            elif strategy == STRATEGY_COM:
                 return execute_com(data["app"], data["action"], data.get("params"))
 
             elif strategy == STRATEGY_UIA:

@@ -1,7 +1,7 @@
 """Browser executor — typed operations with state tracking.
 
 Every method captures state_before/state_after via BrowserObserver.
-Uses tiered strategy: CDP → UIA → keyboard → default browser.
+Uses tiered strategy: Playwright → CDP → UIA → keyboard → default browser.
 """
 
 import logging
@@ -11,6 +11,13 @@ from automation.executors.base import ActionResult
 from automation.observers.browser_observer import BrowserObserver
 
 logger = logging.getLogger(__name__)
+
+# Try Playwright (Tier 0 — auto-wait, better selectors, cross-browser)
+try:
+    from automation.playwright_session import get_playwright_session
+    _HAS_PLAYWRIGHT = True
+except ImportError:
+    _HAS_PLAYWRIGHT = False
 
 _observer = BrowserObserver()
 
@@ -125,6 +132,7 @@ class BrowserExecutor:
     def navigate(self, url):
         """Navigate the active tab to a URL.
 
+        Tier 0: Playwright (auto-wait, better error handling)
         Tier 1: CDP Page.navigate
         Tier 2: UIA address bar (Ctrl+L + type)
         Tier 3: webbrowser.open (last resort)
@@ -136,6 +144,24 @@ class BrowserExecutor:
             url = "https://" + url
 
         before = self._snapshot()
+
+        # Tier 0: Playwright
+        if _HAS_PLAYWRIGHT:
+            try:
+                pw = get_playwright_session()
+                pw.connect()
+                pw.navigate(url)
+                time.sleep(0.3)
+                after = self._snapshot()
+                url_ok = url.split("//", 1)[-1].split("/")[0] in after.get("url", "")
+                return ActionResult(
+                    ok=True, strategy_used="playwright",
+                    state_before=before, state_after=after,
+                    verified=url_ok,
+                    message=f"Navigated to {url}",
+                )
+            except Exception as e:
+                logger.debug(f"Playwright navigate error: {e}")
 
         # Tier 1: CDP
         try:
@@ -221,6 +247,7 @@ class BrowserExecutor:
     def click_element(self, selector=None, text=None):
         """Click an element on the page.
 
+        Tier 0: Playwright click (auto-wait, text selector)
         Tier 1: CDP JS click (by selector or text search)
         Tier 2: UIA click_control
         """
@@ -228,6 +255,23 @@ class BrowserExecutor:
             return ActionResult(ok=False, error="Provide selector or text.")
 
         before = self._snapshot()
+
+        # Tier 0: Playwright
+        if _HAS_PLAYWRIGHT:
+            try:
+                pw = get_playwright_session()
+                pw.connect()
+                pw.click(selector=selector, text=text)
+                time.sleep(0.3)
+                after = self._snapshot()
+                return ActionResult(
+                    ok=True, strategy_used="playwright",
+                    state_before=before, state_after=after,
+                    verified=before != after,
+                    message=f"Clicked: {selector or text}",
+                )
+            except Exception as e:
+                logger.debug(f"Playwright click error: {e}")
 
         # Tier 1: CDP
         try:
@@ -263,6 +307,7 @@ class BrowserExecutor:
     def fill_field(self, selector=None, field_name=None, text=""):
         """Fill a form field.
 
+        Tier 0: Playwright fill (auto-wait, auto-clear)
         Tier 1: CDP JS fill
         Tier 2: UIA set_control_text
         """
@@ -270,6 +315,29 @@ class BrowserExecutor:
             return ActionResult(ok=False, error="No text to fill.")
 
         before = self._snapshot()
+
+        # Tier 0: Playwright
+        if _HAS_PLAYWRIGHT:
+            try:
+                pw = get_playwright_session()
+                pw.connect()
+                target_selector = selector
+                if not target_selector and field_name:
+                    target_selector = (
+                        f"input[name='{field_name}'], "
+                        f"input[placeholder*='{field_name}' i], "
+                        f"textarea[name='{field_name}'], "
+                        f"textarea[placeholder*='{field_name}' i]"
+                    )
+                if target_selector:
+                    pw.fill(target_selector, text)
+                    return ActionResult(
+                        ok=True, strategy_used="playwright",
+                        state_before=before,
+                        message=f"Filled {field_name or selector} with text",
+                    )
+            except Exception as e:
+                logger.debug(f"Playwright fill error: {e}")
 
         # Tier 1: CDP
         try:
@@ -302,9 +370,26 @@ class BrowserExecutor:
     def read_page(self, selector=None):
         """Read page text content.
 
+        Tier 0: Playwright inner_text
         Tier 1: CDP JS extraction
         Tier 2: web_agent.web_read (via URL)
         """
+        # Tier 0: Playwright
+        if _HAS_PLAYWRIGHT:
+            try:
+                pw = get_playwright_session()
+                pw.connect()
+                text = pw.get_text(selector)
+                if text and len(text.strip()) > 10:
+                    return ActionResult(
+                        ok=True, strategy_used="playwright",
+                        state_after={"text_length": len(text)},
+                        verified=True,
+                        message=text[:3000],
+                    )
+            except Exception as e:
+                logger.debug(f"Playwright read error: {e}")
+
         # Tier 1: CDP
         try:
             from automation.browser_driver import browser_read, _check_cdp

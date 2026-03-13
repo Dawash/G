@@ -32,7 +32,7 @@ EMAIL_CREDS_FILE = "email_creds.json"
 LOG_FILE = "assistant.log"
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
-DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
+DEFAULT_OLLAMA_MODEL = "qwen2.5:32b"
 
 PROVIDERS = {
     "1": {"name": "Ollama (Local)", "key_env": None, "needs_key": False},

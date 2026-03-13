@@ -1,6 +1,6 @@
 # agents/ — Multi-Agent "G Swarm" System
 #
-# Architecture: 5 specialized agents communicating via shared Blackboard.
+# Architecture: 6 specialized agents communicating via shared Blackboard.
 #
 #   blackboard.py     — Shared state (dict + SQLite + vector memory)
 #   base.py           — BaseAgent interface
@@ -9,6 +9,7 @@
 #   critic.py         — Verification + scoring after actions
 #   researcher.py     — Web research on failure/stuck
 #   memory_agent.py   — Skill evolution + reflexion learning
+#   debate.py         — Multi-perspective deliberation for critical decisions
 #   orchestrator.py   — State machine that routes between agents
 #
 # Entry point:

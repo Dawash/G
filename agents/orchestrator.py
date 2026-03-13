@@ -28,6 +28,7 @@ from .executor import ExecutorAgent
 from .critic import CriticAgent, CRITIC_INTERVAL, SCORE_CONTINUE, SCORE_RESEARCH
 from .researcher import ResearcherAgent
 from .memory_agent import MemoryAgent
+from .debate import DebateAgent
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ class SwarmOrchestrator:
         self._critic = CriticAgent(llm_fn, self._bb)
         self._researcher = ResearcherAgent(llm_fn, self._bb)
         self._memory = MemoryAgent(llm_fn, self._bb)
+        self._debate = DebateAgent(llm_fn, self._bb)
 
     def execute(self, goal: str) -> str:
         """Execute a complex goal using the multi-agent team.
@@ -213,19 +215,51 @@ class SwarmOrchestrator:
 
                 logger.info(f"[Swarm] Critic: {verdict} (score={score})")
 
+                # When critic is uncertain (score between SCORE_RESEARCH and SCORE_CONTINUE),
+                # debate to break the tie
+                if SCORE_RESEARCH <= score < SCORE_CONTINUE:
+                    debate_verdict = self._debate.quick_debate(
+                        f"The critic scored progress at {score}/100. Should we continue, research, or replan?",
+                        options=["continue", "research", "replan"]
+                    )
+                    logger.info(f"[Swarm] Debate overrides ambiguous verdict: {verdict} -> {debate_verdict}")
+                    verdict = debate_verdict
+
                 if verdict == "done":
+                    # Verify completion via debate before declaring done
+                    actions = self._bb.get("action_history", [])
+                    successes = [a for a in actions if a["success"]]
+                    debate_result = self._debate.run(trigger="verification", context={
+                        "actions": successes,
+                        "goal": goal,
+                    })
+                    if debate_result.get("confidence", 0) < 0.6:
+                        logger.info(f"[Swarm] Debate not confident goal is done "
+                                    f"(confidence={debate_result.get('confidence', 0):.2f}), continuing")
+                        continue
                     return self._build_success_result(goal)
 
                 elif verdict == "replan":
                     if self._replan_count >= MAX_REPLANS:
                         return self._build_partial_result(goal, "Max replans exceeded")
-                    self._replan_count += 1
 
-                    # Replan from failure
+                    # Debate whether to replan or keep trying
                     current = self._bb.get_current_step()
                     failed_desc = current.description if current else "unknown"
                     last_error = self._bb.get("errors", [{}])[-1].get("error", "unknown") if self._bb.get("errors") else "unknown"
+                    progress = self._bb.get_plan_progress()
 
+                    debate_result = self._debate.run(trigger="replan", context={
+                        "failed_step": failed_desc,
+                        "error": last_error,
+                        "progress": progress,
+                        "goal": goal,
+                    })
+                    if debate_result.get("winner") == "continue":
+                        logger.info("[Swarm] Debate says continue, skipping replan")
+                        continue
+
+                    self._replan_count += 1
                     replan_result = self._planner.replan(goal, failed_desc, last_error)
                     if replan_result["status"] != "ok":
                         return self._build_partial_result(goal, "Replan failed")
