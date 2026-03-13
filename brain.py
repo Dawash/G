@@ -1430,7 +1430,7 @@ class Brain:
         # list_reminders and set_reminder are pure local ops — no LLM or strategy
         # overhead needed. Pattern-match here before handing off to selector.
         _ui_lower = user_input.lower().strip()
-        if _re.search(r'\b(?:(?:list|show|check|get)\s+(?:my\s+|all\s+)?reminders?\b|what(?:\'s|\s+are)?\s+(?:my\s+)?reminders?\b)', _ui_lower):
+        if _re.search(r'\b(?:(?:list|show|check|get)\s+(?:all\s+)?(?:my\s+)?(?:all\s+)?reminders?\b|what(?:\'s|\s+are)?\s+(?:my\s+)?reminders?\b)', _ui_lower):
             logger.info("Direct dispatch: list_reminders (fast-path)")
             result = execute_tool("list_reminders", {}, self.action_registry,
                                   reminder_mgr=getattr(self, 'reminder_mgr', None))
@@ -1590,6 +1590,64 @@ class Brain:
             logger.info(f"Direct dispatch: sqrt fast-path (sqrt({val:g}) = {ans_str})")
             return f"The square root of {val:g} is {ans_str}."
 
+        # --- Factorial fast-path: "what is 7 factorial", "7!", "factorial of 7" ---
+        _fact_match = _re.search(
+            r'(?:what\s+is\s+(?:the\s+)?)?(?:(\d+)\s*[!]\s*$|(\d+)\s+factorial\b|factorial\s+of\s+(\d+)|compute\s+(\d+)\s+factorial\b|calculate\s+(\d+)\s+factorial\b)',
+            _ui_lower
+        )
+        if _fact_match:
+            import math
+            n = int(next(g for g in _fact_match.groups() if g is not None))
+            if 0 <= n <= 20:
+                answer = math.factorial(n)
+                logger.info(f"Direct dispatch: factorial fast-path ({n}! = {answer})")
+                return f"{n}! = {answer}"
+
+        # --- Days-until fast-path: "how many days until christmas", "days until new year" ---
+        _days_match = _re.search(
+            r'(?:how\s+many\s+)?days?\s+(?:until|till|to|before|left\s+(?:until|till|to))\s+(.+?)[\?\.\!]*$',
+            _ui_lower
+        )
+        if _days_match:
+            from datetime import date as _date_cls
+            _holiday_query = _days_match.group(1).strip().lower()
+            _HOLIDAYS = {
+                'christmas': (12, 25, 'Christmas (December 25)'),
+                'christmas day': (12, 25, 'Christmas (December 25)'),
+                'xmas': (12, 25, 'Christmas (December 25)'),
+                'new year': (1, 1, "New Year's Day (January 1)"),
+                "new year's": (1, 1, "New Year's Day (January 1)"),
+                "new year's day": (1, 1, "New Year's Day (January 1)"),
+                'new years': (1, 1, "New Year's Day (January 1)"),
+                'halloween': (10, 31, 'Halloween (October 31)'),
+                'valentine': (2, 14, "Valentine's Day (February 14)"),
+                "valentine's": (2, 14, "Valentine's Day (February 14)"),
+                "valentine's day": (2, 14, "Valentine's Day (February 14)"),
+                'valentines': (2, 14, "Valentine's Day (February 14)"),
+                'valentines day': (2, 14, "Valentine's Day (February 14)"),
+                'independence day': (7, 4, 'Independence Day (July 4)'),
+                'fourth of july': (7, 4, 'Independence Day (July 4)'),
+                '4th of july': (7, 4, 'Independence Day (July 4)'),
+                'july 4th': (7, 4, 'Independence Day (July 4)'),
+            }
+            _hol = _HOLIDAYS.get(_holiday_query)
+            if _hol:
+                _month, _day, _label = _hol
+                _today = _date_cls.today()
+                _target = _date_cls(_today.year, _month, _day)
+                if _target < _today:
+                    _target = _date_cls(_today.year + 1, _month, _day)
+                _delta = (_target - _today).days
+                if _delta == 0:
+                    logger.info(f"Direct dispatch: days-until fast-path ({_label} is today!)")
+                    return f"{_label} is today!"
+                elif _delta == 1:
+                    logger.info(f"Direct dispatch: days-until fast-path ({_label} is tomorrow!)")
+                    return f"{_label} is tomorrow!"
+                else:
+                    logger.info(f"Direct dispatch: days-until fast-path ({_delta} days until {_label})")
+                    return f"There are {_delta} days until {_label}."
+
         # --- Math fast-path: "what is 2+2", "999 times 999", "2 to the power of 10" ---
         # Pre-process word-form operators into symbols
         _math_input = _ui_lower
@@ -1645,9 +1703,9 @@ class Brain:
         # --- Unit conversion fast-path: "convert 100 fahrenheit to celsius" ---
         _conv_match = _re.search(
             r'(?:convert\s+)?(\d+(?:\.\d+)?)\s*(?:degrees?\s+)?'
-            r'(fahrenheit|celsius|f|c|kilometers?|km|miles?|kilograms?|kg|pounds?|lbs?|meters?|feet|ft|inches?|centimeters?|cm)'
+            r'(fahrenheit|celsius|centimeters?|cm|kilometers?|km|miles?|kilograms?|kg|pounds?|lbs?|grams?|meters?|feet|foot|ft|inches?|m|g|f|c)'
             r'\s+(?:to|in)\s+'
-            r'(fahrenheit|celsius|f|c|kilometers?|km|miles?|kilograms?|kg|pounds?|lbs?|meters?|feet|ft|inches?|centimeters?|cm)',
+            r'(fahrenheit|celsius|centimeters?|cm|kilometers?|km|miles?|kilograms?|kg|pounds?|lbs?|grams?|meters?|feet|foot|ft|inches?|m|g|f|c)',
             _ui_lower
         )
         if _conv_match:
@@ -1657,32 +1715,55 @@ class Brain:
                 u = u.lower()
                 if u.endswith('s') and not u.endswith('us'):
                     u = u[:-1]
-                # Map long-form names to abbreviations used in conversion dict
+                # Map long-form names to canonical keys used in conversion dict
                 _aliases = {
-                    'kilogram': 'kg', 'kilometer': 'km', 'centimeter': 'cm',
+                    'kilogram': 'kg', 'kilometer': 'km',
+                    'centimeter': 'cm',
+                    'gram': 'g',
                     'pound': 'pound', 'lb': 'pound',
-                    'mile': 'mile', 'meter': 'meter',
-                    'foot': 'feet', 'inch': 'inch',
+                    'mile': 'mile', 'meter': 'm',
+                    'foot': 'ft', 'feet': 'ft',
+                    'inch': 'inch', 'inche': 'inch',  # "inches" -> strip 's' -> "inche"
                 }
                 return _aliases.get(u, u)
             src = _norm_unit(_conv_match.group(2))
             dst = _norm_unit(_conv_match.group(3))
             conversions = {
+                # Temperature
                 ('fahrenheit', 'celsius'): lambda v: (v - 32) * 5/9,
                 ('f', 'c'): lambda v: (v - 32) * 5/9,
                 ('celsius', 'fahrenheit'): lambda v: v * 9/5 + 32,
                 ('c', 'f'): lambda v: v * 9/5 + 32,
+                # Distance: km <-> mile
                 ('km', 'mile'): lambda v: v * 0.621371,
                 ('mile', 'km'): lambda v: v * 1.60934,
-                ('kg', 'pound'): lambda v: v * 2.20462,
-                ('pound', 'kg'): lambda v: v * 0.453592,
-                ('lb', 'kg'): lambda v: v * 0.453592,
-                ('meter', 'feet'): lambda v: v * 3.28084,
-                ('meter', 'ft'): lambda v: v * 3.28084,
-                ('feet', 'meter'): lambda v: v * 0.3048,
-                ('ft', 'meter'): lambda v: v * 0.3048,
+                # Distance: m <-> ft
+                ('m', 'ft'): lambda v: v * 3.28084,
+                ('ft', 'm'): lambda v: v * 0.3048,
+                # Distance: m <-> mile
+                ('m', 'mile'): lambda v: v * 0.000621371,
+                ('mile', 'm'): lambda v: v * 1609.34,
+                # Distance: ft <-> cm
+                ('ft', 'cm'): lambda v: v * 30.48,
+                ('cm', 'ft'): lambda v: v / 30.48,
+                # Distance: ft <-> mile
+                ('ft', 'mile'): lambda v: v / 5280,
+                ('mile', 'ft'): lambda v: v * 5280,
+                # Distance: m <-> km
+                ('m', 'km'): lambda v: v / 1000,
+                ('km', 'm'): lambda v: v * 1000,
+                # Distance: inch <-> cm
                 ('inch', 'cm'): lambda v: v * 2.54,
                 ('cm', 'inch'): lambda v: v / 2.54,
+                # Weight: kg <-> pound
+                ('kg', 'pound'): lambda v: v * 2.20462,
+                ('pound', 'kg'): lambda v: v * 0.453592,
+                # Weight: g <-> pound
+                ('g', 'pound'): lambda v: v * 0.00220462,
+                ('pound', 'g'): lambda v: v * 453.592,
+                # Weight: g <-> kg
+                ('g', 'kg'): lambda v: v / 1000,
+                ('kg', 'g'): lambda v: v * 1000,
             }
             fn = conversions.get((src, dst))
             if fn:
