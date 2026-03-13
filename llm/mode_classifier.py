@@ -35,7 +35,7 @@ QUICK_PATTERNS = [
     re.compile(r"^set (a |an )?reminder\b", re.I),
     re.compile(r"^(turn on|turn off|toggle|enable|disable)\s+(dark mode|bluetooth|wifi|wi-fi|night light|airplane)", re.I),
     re.compile(r"^(shutdown|restart|sleep|cancel shutdown)$", re.I),
-    re.compile(r"^(pause|resume|next|previous|skip|volume|mute)\s*(music|song|track)?$", re.I),
+    re.compile(r"^(pause|resume|next|previous|skip|volume|mute|unmute)\s*(up|down|music|song|track)?$", re.I),
     re.compile(r"^(hey|hi|hello|good (morning|afternoon|evening)|how are you|thanks?|thank you)", re.I),
     re.compile(r"(introduce yourself|tell .+ about yourself|who are you|what can you do|what are you|describe yourself)", re.I),
     # Terminal / system info queries
