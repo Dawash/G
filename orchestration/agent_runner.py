@@ -128,16 +128,18 @@ def _try_swarm(user_input, brain, speak_fn, messages):
 
         if error_holder[0]:
             logger.warning(f"Swarm failed: {error_holder[0]}")
+            logger.info(f"[metrics] swarm_used=True success=False task='{user_input[:50]}'")
             return None  # fall back to legacy
 
         result = result_holder[0]
         if result and "error" not in str(result).lower()[:30]:
+            logger.info(f"[metrics] swarm_used=True success=True task='{user_input[:50]}'")
             if messages is not None:
                 messages.append({"role": "assistant", "content": str(result)})
             return result
 
         # Swarm returned error-ish result — fall back
-        logger.info(f"Swarm returned partial/error result, falling back")
+        logger.info(f"[metrics] swarm_used=True success=False partial=True task='{user_input[:50]}'")
         return None
 
     except Exception as e:

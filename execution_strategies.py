@@ -104,7 +104,7 @@ _CLI_COMMANDS = [
     (r"\bbattery\s*(?:level|status|percent)?",
      lambda m: "(Get-CimInstance Win32_Battery | Select-Object EstimatedChargeRemaining,BatteryStatus | Format-List) 2>$null; if(!$?) { 'No battery detected (desktop PC)' }"),
     (r"\b(?:cpu|processor)\s*(?:usage|load|percent)",
-     lambda m: "Get-CimInstance Win32_Processor | ForEach-Object { \"CPU is at $($_.LoadPercentage)% load.\" }"),
+     lambda m: "'CPU is at {0}% load.' -f (Get-CimInstance Win32_Processor).LoadPercentage"),
     (r"\b(?:ram|memory)\s*(?:usage|free|available|status|info)",
      lambda m: "Get-CimInstance Win32_OperatingSystem | ForEach-Object { $total = [math]::Round($_.TotalVisibleMemorySize/1MB,1); $free = [math]::Round($_.FreePhysicalMemory/1MB,1); $used = [math]::Round($total - $free, 1); \"You have $total GB total RAM. $used GB is in use, $free GB is free.\" }"),
     # "how much ram am I using", "how much memory is being used"

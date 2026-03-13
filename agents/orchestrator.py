@@ -138,6 +138,11 @@ class SwarmOrchestrator:
         self._actions_since_critique = 0
 
         while True:
+            # --- Cancellation check (set by agent_runner on user interrupt) ---
+            if self._bb.get("cancelled", False):
+                logger.info("[Swarm] Cancelled by user")
+                return self._build_partial_result(goal, "Cancelled by user")
+
             # --- Budget checks ---
             if self._bb.get("total_tool_calls", 0) >= MAX_TOTAL_ACTIONS:
                 logger.warning("[Swarm] Max actions reached, aborting")
