@@ -81,7 +81,7 @@ def _summarize_news(headlines):
     # LLM summarization — use provider.chat() which takes a plain string
     try:
         from ai_providers import create_provider
-        from config import load_config, get_system_prompt, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL
+        from config import load_config, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL
         cfg = load_config()
         if cfg:
             provider = create_provider(

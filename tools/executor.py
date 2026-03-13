@@ -415,7 +415,18 @@ class ToolExecutor:
         if tool_name in ("open_app", "close_app", "minimize_app", "focus_window"):
             name = args.get("name", "")
             if name:
-                # "Google Chrome" → "Chrome", "Mozilla Firefox" → "Firefox"
+                name_lower = name.lower().strip()
+                # Strip common LLM-added suffixes: "Firefox browser" → "Firefox"
+                _STRIP_SUFFIXES = [
+                    " browser", " app", " application", " program",
+                    " editor", " player", " client", " viewer",
+                ]
+                for suffix in _STRIP_SUFFIXES:
+                    if name_lower.endswith(suffix):
+                        name = name[:len(name) - len(suffix)].strip()
+                        name_lower = name.lower()
+                        break
+                # Full name normalizations
                 _APP_NORMALIZATIONS = {
                     "google chrome": "Chrome",
                     "mozilla firefox": "Firefox",
@@ -429,9 +440,11 @@ class ToolExecutor:
                     "visual studio code": "VS Code",
                     "windows terminal": "Terminal",
                 }
-                normalized = _APP_NORMALIZATIONS.get(name.lower())
+                normalized = _APP_NORMALIZATIONS.get(name_lower)
                 if normalized:
                     args["name"] = normalized
+                else:
+                    args["name"] = name  # Use suffix-stripped version
 
         # Ensure required "action" field isn't empty for multi-action tools
         if tool_name == "manage_files" and not args.get("action"):

@@ -241,14 +241,30 @@ def _handle_agent_task(arguments, action_registry=None, reminder_mgr=None, speak
         reminder_mgr=reminder_mgr,
         speak_fn=speak_fn,
     )
+
+    # Scale timeout by model size (32b needs much more time than 7b)
+    _agent_timeout = 120  # base: 2 minutes
+    try:
+        from config import load_config
+        _cfg = load_config()
+        _model = (_cfg.get("ollama_model") or "").lower()
+        if any(s in _model for s in ("72b", "70b")):
+            _agent_timeout = 480  # 8 min
+        elif any(s in _model for s in ("32b", "27b")):
+            _agent_timeout = 300  # 5 min
+        elif any(s in _model for s in ("14b", "13b")):
+            _agent_timeout = 180  # 3 min
+    except Exception:
+        pass
+
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(agent.execute, goal)
-            result = future.result(timeout=30)
+            result = future.result(timeout=_agent_timeout)
         return result or "Task completed."
     except FuturesTimeout:
         agent.cancel()
-        logger.warning(f"agent_task timed out after 30s: {goal[:60]}")
+        logger.warning(f"agent_task timed out after {_agent_timeout}s: {goal[:60]}")
         return "Task took too long. Some steps may have completed."
 
 

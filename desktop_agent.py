@@ -14,14 +14,8 @@ Unlike a blind script runner, this agent:
 The LLM acts as the BRAIN at every decision point — not just for planning,
 but for real-time "what do I see? what went wrong? what should I do?"
 
-NOTE: This is the active implementation. A decomposed version exists in
-automation/ with the same logic split across focused modules:
-  - automation/desktop_agent.py  (DesktopAgentV2 — orchestrator)
-  - automation/planner.py        (AgentPlanner — plan generation/replanning)
-  - automation/observer.py       (ScreenObserver — screenshots/vision/windows)
-  - automation/verifier.py       (StepVerifier — step/goal verification)
-  - automation/recovery.py       (FailureRecovery — diagnosis/self-healing)
-See docs/agent-policy.md for the escalation policy and execution budgets.
+NOTE: This is the active implementation. Related automation modules live in
+automation/ (orchestrator, ui_control, window_manager, browser_driver, etc.).
 """
 
 import json
