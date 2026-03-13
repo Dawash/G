@@ -1430,7 +1430,7 @@ class Brain:
         # list_reminders and set_reminder are pure local ops — no LLM or strategy
         # overhead needed. Pattern-match here before handing off to selector.
         _ui_lower = user_input.lower().strip()
-        if _re.search(r'\b(?:(?:list|show|check|get)\s+(?:all\s+)?(?:my\s+)?(?:all\s+)?reminders?\b|what(?:\'s|\s+are)?\s+(?:my\s+)?reminders?\b)', _ui_lower):
+        if _re.search(r'\b(?:(?:list|show|check|get)\s+(?:all\s+)?(?:my\s+)?(?:all\s+)?reminders?\b|what(?:\'s|\s+are)?\s+(?:my\s+)?reminders?\b)|^(?:my\s+)?reminders?$', _ui_lower):
             logger.info("Direct dispatch: list_reminders (fast-path)")
             result = execute_tool("list_reminders", {}, self.action_registry,
                                   reminder_mgr=getattr(self, 'reminder_mgr', None))
@@ -1439,6 +1439,7 @@ class Brain:
 
         _reminder_set_match = _re.search(
             r'(?:remind\s+me\s+(?:to\s+)?(.+?)\s+(?:at|in|on)\s+(.+)'
+            r'|remind\s+me\s+(?:at|in|on)\s+(.+?)\s+to\s+(.+)'
             r'|set\s+(?:a\s+)?reminder\s+(?:for\s+)?(.+?)\s+(?:to|for)\s+(.+)'
             r'|set\s+(?:a\s+)?reminder\s+(?:to\s+)(.+?)(?:\s+(?:at|in|on)\s+(.+))?$)',
             _ui_lower,
@@ -1448,11 +1449,13 @@ class Brain:
             # Groups differ by which branch matched; pick first non-None pair
             if g[0] is not None:   # remind me to X at/in Y
                 msg, t = g[0].strip(), g[1].strip()
-            elif g[2] is not None: # set a reminder for X to/for Y
+            elif g[2] is not None: # remind me at Y to X
                 msg, t = g[3].strip(), g[2].strip()
+            elif g[4] is not None: # set a reminder for X to/for Y
+                msg, t = g[5].strip(), g[4].strip()
             else:                  # set a reminder to X [at/in Y]
-                msg = g[4].strip()
-                t = (g[5] or "in 1 hour").strip()
+                msg = g[6].strip()
+                t = (g[7] or "in 1 hour").strip()
             if msg and t:
                 logger.info(f"Direct dispatch: set_reminder fast-path — '{msg}' at '{t}'")
                 result = execute_tool(
@@ -1484,8 +1487,8 @@ class Brain:
                     if result:
                         return str(result)
 
-        # --- Time/date fast-path: "what time is it", "what day is it", "what time is it in tokyo" ---
-        _time_match = _re.search(r'\b(?:what(?:\'?s|\s+is)?\s+(?:the\s+)?(?:time|day|date)\b|what\s+(?:time|day)\s+is\s+it)', _ui_lower)
+        # --- Time/date fast-path: "what time is it", "what day is it", "time", "date", "day" ---
+        _time_match = _re.search(r'\b(?:what(?:\'?s|\s+is)?\s+(?:the\s+)?(?:time|day|date)\b|what\s+(?:time|day)\s+is\s+it)|^(?:the\s+)?(?:time|date|day)$', _ui_lower)
         if _time_match:
             # Check for timezone/city: "what time is it in tokyo"
             _tz_match = _re.search(r'\b(?:time\s+(?:is\s+it\s+)?in|time\s+in)\s+(.+?)[\?\.\!]*$', _ui_lower)
