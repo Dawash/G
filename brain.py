@@ -1444,6 +1444,14 @@ class Brain:
         if len(raw_output) < 60 and not any(c in raw_output for c in ['|', '\t', '{']):
             return raw_output
 
+        # Already-natural sentence output (CLI patterns often return ready-to-speak text)
+        # Detect: starts with word, ends with period, contains human words, no table chars
+        _clean = raw_output.strip()
+        if (_clean and _clean[0].isupper() and _clean.endswith('.')
+                and not any(c in _clean for c in ['|', '\t', '{', '}', '\\\\'])
+                and any(w in _clean.lower() for w in ['is ', 'are ', 'has ', 'have ', 'your ', 'you '])):
+            return _clean
+
         try:
             natural = self.quick_chat(
                 f"The user asked: \"{question}\"\n"

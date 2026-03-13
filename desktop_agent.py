@@ -24,7 +24,10 @@ import os
 import re
 import time
 import requests
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+# Shared pool for agent tool execution (avoid per-call ThreadPoolExecutor)
+_agent_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="agent_tool")
 
 logger = logging.getLogger(__name__)
 
@@ -3014,7 +3017,6 @@ class DesktopAgent:
         Tries state-first orchestrator before falling back to brain.execute_tool.
         """
         from brain import execute_tool
-        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
         tool_name = decision.get("tool", "")
         args = decision.get("args", {})
@@ -3127,10 +3129,9 @@ class DesktopAgent:
             progress_thread = threading.Thread(target=_progress, daemon=True)
             progress_thread.start()
         try:
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(execute_tool, tool_name, args,
-                                     self.action_registry, self.reminder_mgr)
-                result = future.result(timeout=timeout)
+            future = _agent_pool.submit(execute_tool, tool_name, args,
+                                        self.action_registry, self.reminder_mgr)
+            result = future.result(timeout=timeout)
         except FuturesTimeout:
             logger.warning(f"Tool {tool_name} timed out after {timeout}s")
             result = f"TIMEOUT: {tool_name} took longer than {timeout}s"

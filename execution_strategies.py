@@ -41,6 +41,27 @@ STRATEGY_ORDER = [STRATEGY_CLI, STRATEGY_API, STRATEGY_TOOL, STRATEGY_UIA, STRAT
 _CLI_BLOCKED = {"format", "del /s", "rm -rf", "remove-item c:", "remove-item /",
                 "reg delete", "shutdown", "restart", "stop-computer"}
 
+def _list_files_cmd(location):
+    """Generate PowerShell command to list files in a known location."""
+    _LOCATIONS = {
+        "desktop": "$env:USERPROFILE\\Desktop",
+        "documents": "$env:USERPROFILE\\Documents",
+        "downloads": "$env:USERPROFILE\\Downloads",
+        "pictures": "$env:USERPROFILE\\Pictures",
+        "videos": "$env:USERPROFILE\\Videos",
+        "music": "$env:USERPROFILE\\Music",
+    }
+    path = _LOCATIONS.get(location.lower(), f"$env:USERPROFILE\\{location}")
+    return (
+        f"$files = Get-ChildItem '{path}' -ErrorAction SilentlyContinue | "
+        "Select-Object Name,@{N='Size';E={if($_.PSIsContainer){'folder'}elseif($_.Length -ge 1GB)"
+        "{'{0:N1} GB' -f ($_.Length/1GB)}elseif($_.Length -ge 1MB){'{0:N0} MB' -f ($_.Length/1MB)}"
+        "else{'{0:N0} KB' -f ($_.Length/1KB)}}} | Select-Object -First 20; "
+        f"if($files){{ 'Files on your {location}: ' + ($files | ForEach-Object {{ "
+        "\"$($_.Name) ($($_.Size))\" }) -join ', ' }}else{{ 'No files found.' }}"
+    )
+
+
 def _ram_per_app_cmd(app_name):
     """Generate PowerShell command to check RAM usage for a specific app."""
     return (
@@ -67,7 +88,7 @@ _CLI_COMMANDS = [
      lambda m: "winget list"),
 
     # System info
-    (r"\bdisk\s*(?:space|usage|free|size)",
+    (r"\b(?:disk|storage)\s*(?:space|usage|free|size|left)|how\s+much\s+(?:disk|storage|space)\s+(?:do\s+i\s+have|is|left)",
      lambda m: "Get-PSDrive C | ForEach-Object { $used = [math]::Round($_.Used/1GB,1); $free = [math]::Round($_.Free/1GB,1); $total = [math]::Round(($_.Used + $_.Free)/1GB,1); $pct = [math]::Round($used/$total*100); \"Drive C: $free GB free out of $total GB ($pct% used).\" }"),
     (r"\b(?:system|computer|pc)\s*(?:info|specs?)|(?:about|specs?\s*(?:of)?)\s+(?:my\s+)?(?:system|computer|pc|laptop)|(?:tell|show|what(?:'s)?)\s+(?:me\s+)?(?:about\s+)?(?:my\s+)?(?:computer|pc|laptop|system)\s*(?:info|specs?|details)?|(?:my\s+)?(?:pc|computer|laptop)\s+specs?",
      lambda m: "$os = Get-CimInstance Win32_OperatingSystem; $cpu = Get-CimInstance Win32_Processor; $ram = [math]::Round($os.TotalVisibleMemorySize/1MB); \"$($os.Caption) | $($cpu.Name) | $ram GB RAM | $($os.OSArchitecture)\""),
@@ -118,6 +139,10 @@ _CLI_COMMANDS = [
     (r"\b(?:list|show|running)\s*(?:process(?:es)?|apps?|programs?)",
      lambda m: "Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 20 Name,@{N='CPU(s)';E={[math]::Round($_.CPU,1)}},@{N='RAM(MB)';E={[math]::Round($_.WS/1MB)}} | Format-Table -AutoSize"),
 
+    # File listing
+    (r"(?:list|show|what(?:'s)?)\s+(?:me\s+)?(?:the\s+)?files?\s+(?:on|in)\s+(?:my\s+)?(?:the\s+)?(\w+)",
+     lambda m: _list_files_cmd(m.group(1).strip())),
+
     # Network
     (r"\bwifi\s*(?:connect|join)\s+(.+)",
      lambda m: f'netsh wlan connect name="{m.group(1).strip()}"'),
@@ -128,7 +153,7 @@ _CLI_COMMANDS = [
     (r"\bwifi\s*(?:list|scan|available|networks?)",
      lambda m: "netsh wlan show networks mode=bssid"),
     (r"(?:show|list|what(?:'s)?|check)\s+(?:me\s+)?(?:my\s+)?(?:network|internet)\s*(?:connections?|interfaces?|adapters?|status)",
-     lambda m: "Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { $ip = (Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).IPAddress; \"$($_.Name): $($_.LinkSpeed) - IP: $ip\" }"),
+     lambda m: "$adapters = Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { $ip = (Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).IPAddress; \"$($_.Name) is connected at $($_.LinkSpeed)\" + $(if($ip){\" with IP $ip\"}else{''}) }; \"Your active network connections: \" + ($adapters -join ', ') + '.'"),
     (r"\bping\s+(\S+)",
      lambda m: f"ping -n 4 {m.group(1).strip()}"),
     (r"\bflush\s*dns|clear\s*dns",
