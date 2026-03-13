@@ -1685,12 +1685,14 @@ class Brain:
                         ans_str = f"{answer:g}" if isinstance(answer, float) else str(answer)
                         logger.info(f"Direct dispatch: math fast-path ({expr} = {ans_str})")
                         return f"{expr} = {ans_str}"
+                except ZeroDivisionError:
+                    return "You can't divide by zero — it's undefined."
                 except Exception:
                     pass
 
         # --- Percentage fast-path: "what is 15% of 200", "calculate 20% of 500" ---
         _pct_match = _re.search(
-            r'(?:what\s+is\s+|calculate\s+|find\s+)?(\d+(?:\.\d+)?)\s*%\s*of\s+(\d+(?:\.\d+)?)',
+            r'(?:what\s+is\s+|calculate\s+|find\s+)?(\d+(?:\.\d+)?)\s*(?:%|percent)\s*of\s+(\d+(?:\.\d+)?)',
             _ui_lower
         )
         if _pct_match:
@@ -1752,6 +1754,9 @@ class Brain:
                 # Distance: m <-> km
                 ('m', 'km'): lambda v: v / 1000,
                 ('km', 'm'): lambda v: v * 1000,
+                # Distance: m <-> cm
+                ('m', 'cm'): lambda v: v * 100,
+                ('cm', 'm'): lambda v: v / 100,
                 # Distance: inch <-> cm
                 ('inch', 'cm'): lambda v: v * 2.54,
                 ('cm', 'inch'): lambda v: v / 2.54,
