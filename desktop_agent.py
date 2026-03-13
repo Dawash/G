@@ -294,10 +294,87 @@ def _detect_and_dismiss_popup(goal_lower=""):
     logger.info(f"Dismissing popup ({popup_type}): '{original_title}'")
     try:
         if popup_type == "app_picker":
-            # App picker: just press Escape to cancel (universal)
-            # Don't try to pick an app — user's system may have different options
-            pyautogui.press("escape")
-            time.sleep(0.5)
+            # App picker: try to pick the right app using UIA, fallback to Escape
+            _picker_handled = False
+            try:
+                from automation.ui_control import list_controls
+                controls = list_controls(window=original_title, max_depth=4, max_count=50)
+                if controls:
+                    # Find clickable items — prefer relevant apps based on goal
+                    item_names = []
+                    for c in controls:
+                        ctype = (c.get("control_type") or "").lower()
+                        cname = (c.get("name") or "").strip()
+                        if cname and ctype in ("listitem", "button", "text"):
+                            item_names.append((cname, c.get("x", 0), c.get("y", 0)))
+
+                    # Smart app selection based on what's being opened
+                    # Extract the file/protocol from the dialog title
+                    _target = title_lower.replace("select an app to open", "").replace(
+                        "how do you want to open", "").replace("open with", "").strip(" '\"")
+
+                    # Priority map: which apps handle what
+                    _app_priority = {
+                        ".html": ["firefox", "chrome", "edge", "brave"],
+                        ".htm": ["firefox", "chrome", "edge", "brave"],
+                        ".pdf": ["firefox", "chrome", "edge", "adobe"],
+                        ".txt": ["notepad", "visual studio code", "cursor"],
+                        ".py": ["visual studio code", "cursor", "notepad"],
+                        ".js": ["visual studio code", "cursor", "notepad"],
+                        ".json": ["visual studio code", "cursor", "notepad"],
+                        ".md": ["visual studio code", "cursor", "notepad"],
+                        ".csv": ["excel", "notepad"],
+                        ".doc": ["word", "wordpad"],
+                        ".docx": ["word"],
+                        ".xls": ["excel"],
+                        ".xlsx": ["excel"],
+                        ".mp3": ["windows media player", "groove"],
+                        ".mp4": ["windows media player", "vlc"],
+                    }
+
+                    # Default: try Notepad for text, Firefox/Chrome for web
+                    best_apps = ["notepad"]
+                    for ext, apps in _app_priority.items():
+                        if ext in _target or ext in goal_lower:
+                            best_apps = apps
+                            break
+
+                    # Also check if goal mentions a specific app
+                    if goal_lower:
+                        for item_name, _, _ in item_names:
+                            if item_name.lower() in goal_lower:
+                                best_apps = [item_name.lower()]
+                                break
+
+                    # Try to click the best matching app in the list
+                    for preferred in best_apps:
+                        for item_name, ix, iy in item_names:
+                            if preferred in item_name.lower() and ix > 0 and iy > 0:
+                                pyautogui.click(ix, iy)
+                                time.sleep(0.5)
+                                # Click "Just once" or "Always" button if present
+                                try:
+                                    for c in list_controls(max_depth=3, max_count=20):
+                                        cn = (c.get("name") or "").lower()
+                                        if cn in ("just once", "ok", "open"):
+                                            pyautogui.click(c["x"], c["y"])
+                                            time.sleep(0.3)
+                                            break
+                                except Exception:
+                                    pyautogui.press("enter")
+                                    time.sleep(0.3)
+                                _picker_handled = True
+                                logger.info(f"App picker: selected '{item_name}' for '{_target}'")
+                                break
+                        if _picker_handled:
+                            break
+            except Exception as e:
+                logger.debug(f"App picker UIA selection failed: {e}")
+
+            if not _picker_handled:
+                # Fallback: just close it
+                pyautogui.press("escape")
+                time.sleep(0.5)
 
         elif popup_type == "save":
             # Save dialog: try "Don't Save" (Alt+N), fallback to Escape
@@ -352,20 +429,46 @@ def _detect_and_dismiss_popup(goal_lower=""):
                 time.sleep(0.5)
 
         else:
-            # UNIVERSAL fallback for all other popups:
-            # Try Escape (most dialogs close with Escape)
-            pyautogui.press("escape")
-            time.sleep(0.5)
-            still = gw.getActiveWindow()
-            if still and still.title == original_title:
-                # Still there — try Enter (accepts default button)
-                pyautogui.press("enter")
+            # UNIVERSAL fallback: smart button scan → Escape → Enter → Alt+F4
+            _dismissed_via_uia = False
+            try:
+                from automation.ui_control import list_controls
+                controls = list_controls(window=original_title, max_depth=3, max_count=30)
+                if controls:
+                    # Find the best dismiss button by priority
+                    _dismiss_priority = [
+                        "ok", "close", "cancel", "no thanks", "no, thanks",
+                        "not now", "maybe later", "skip", "later", "dismiss",
+                        "got it", "continue", "accept", "allow", "deny",
+                        "don't save", "go back", "just once", "never",
+                    ]
+                    for btn_text in _dismiss_priority:
+                        for c in controls:
+                            ctype = (c.get("control_type") or "").lower()
+                            cname = (c.get("name") or "").lower()
+                            if ctype == "button" and btn_text == cname:
+                                pyautogui.click(c["x"], c["y"])
+                                time.sleep(0.5)
+                                _dismissed_via_uia = True
+                                logger.info(f"UIA dismissed '{popup_type}' via button '{cname}'")
+                                break
+                        if _dismissed_via_uia:
+                            break
+            except Exception:
+                pass
+
+            if not _dismissed_via_uia:
+                # Keyboard fallback: Escape → Enter → Alt+F4
+                pyautogui.press("escape")
                 time.sleep(0.5)
-                still2 = gw.getActiveWindow()
-                if still2 and still2.title == original_title:
-                    # STILL there — nuclear option: Alt+F4
-                    pyautogui.hotkey("alt", "F4")
+                still = gw.getActiveWindow()
+                if still and still.title == original_title:
+                    pyautogui.press("enter")
                     time.sleep(0.5)
+                    still2 = gw.getActiveWindow()
+                    if still2 and still2.title == original_title:
+                        pyautogui.hotkey("alt", "F4")
+                        time.sleep(0.5)
     except Exception:
         pass
 
