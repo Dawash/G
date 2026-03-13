@@ -746,10 +746,11 @@ _DIRECT_TOOL_PATTERNS = [
     (r"(?:previous|prev|last)\s+tab",
      lambda m: {"tool": "press_key", "args": {"keys": "ctrl+shift+tab"}}),
 
-    # App management — exclude browser terms like "the tab", "this tab", "all"
+    # App management — exclude: "side by side", "split", and compound "open X and <action>"
     (r"^(?:open|launch|start|run)\s+(.+?)(?:\s+(?:app(?:lication)?|for me|please|now|real quick))*$",
      lambda m: {"tool": "open_app", "args": {"name": re.sub(r'\s+(?:for me|please|now|real quick)$', '', m.group(1).strip())}}
      if "side by side" not in m.group(1).lower() and "split" not in m.group(1).lower()
+        and not re.search(r'\band\s+(?:type|search|play|go|find|click|fill|navigate|then|also|send)', m.group(1), re.I)
      else None),
     (r"^(?:close|quit|exit|stop|kill)\s+(.+?)(?:\s+app)?$",
      lambda m: {"tool": "close_app", "args": {"name": m.group(1).strip()}}
