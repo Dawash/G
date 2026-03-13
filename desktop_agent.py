@@ -192,8 +192,21 @@ def _detect_and_dismiss_popup(goal_lower=""):
             # Browser promos / promotions (any browser)
             "promo": [
                 "pin to taskbar", "would you like to pin",
-                "sign in to", "turn on sync", "import bookmarks",
+                "turn on sync", "import bookmarks",
                 "sync your", "set up your",
+            ],
+            # Login walls / auth screens (block content, need to be bypassed)
+            # NOTE: Only detected if user's goal is NOT about logging in
+            "login_wall": ([
+                "sign in", "log in", "login", "inloggen", "anmelden",
+                "sign up", "create account", "forgot password",
+            ] if not any(w in goal_lower for w in ["sign in", "log in", "login", "account"]) else []),
+            # Subscription / license / trial prompts
+            "subscription": [
+                "get started with", "try 1 month free", "try free",
+                "view your options", "activate", "unlicensed product",
+                "subscription", "upgrade now", "buy now", "purchase",
+                "your trial", "trial expired", "license",
             ],
             # Profile picker
             "profile": [
@@ -324,6 +337,24 @@ def _detect_and_dismiss_popup(goal_lower=""):
             still = gw.getActiveWindow()
             if still and still.title == original_title:
                 pyautogui.press("enter")
+                time.sleep(0.5)
+
+        elif popup_type == "login_wall":
+            # Login walls (X.com "Sign in", etc.): close the tab, not the whole browser
+            # These block content — going back or closing the tab is the best approach
+            pyautogui.hotkey("ctrl", "w")  # Close current tab
+            time.sleep(0.5)
+
+        elif popup_type == "subscription":
+            # Subscription/license prompts (Word "Get started with Microsoft 365", etc.)
+            # Try Escape to close the overlay first
+            pyautogui.press("escape")
+            time.sleep(0.5)
+            still = gw.getActiveWindow()
+            if still and still.title == original_title:
+                # Try clicking the X button (top-right of overlay) via Alt+F4
+                # But only close the dialog, not the app — try Escape again with focus
+                pyautogui.hotkey("alt", "F4")
                 time.sleep(0.5)
 
         else:
@@ -2493,6 +2524,7 @@ class DesktopAgent:
             "default browser", "not your default", "set as default",
             "cookie banner", "cookie consent", "accept cookies",
             "sign in required", "login required",
+            "sign in to", "log in to", "inloggen", "anmelden",
             "choose an app", "how do you want to open", "select an app",
             "open with", "windows cannot find",
             "overlay", "blocking",
@@ -2503,6 +2535,8 @@ class DesktopAgent:
             "suspicious", "webadvisor", "site blocked", "unsafe",
             "pin to taskbar", "would you like to pin",
             "smartscreen", "malware", "phishing", "deceptive",
+            "get started with", "unlicensed product", "try free",
+            "activate", "subscription", "trial expired",
         ]
         not_blockers = [
             "terminal", "command prompt", "powershell", "cmd",
