@@ -41,6 +41,9 @@ _HANDLER_TIMEOUTS = {
     "ask_user_choice": 120,
     "ask_user_input": 120,
     "ask_yes_no": 60,
+    # Reminder tools: fast local operations, no LLM needed
+    "set_reminder": 30,
+    "list_reminders": 15,
 }
 
 

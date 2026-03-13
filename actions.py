@@ -46,22 +46,77 @@ def minimize_window(title):
 
 
 def close_window(title):
-    """Close windows matching the given title, with event-driven verification."""
+    """Close windows matching the given title, with event-driven verification.
+
+    Falls back to taskkill for UWP apps (Calculator, etc.) that don't respond to w.close().
+    """
     try:
         windows = gw.getWindowsWithTitle(title)
         if windows:
             for w in windows:
-                w.close()
-            # Verify window actually closed instead of assuming
+                try:
+                    w.close()
+                except Exception:
+                    pass
+            # Verify window actually closed
             try:
                 from automation.event_waiter import wait_for_window_gone
-                result = wait_for_window_gone(title, max_wait=5, interval=0.2)
+                result = wait_for_window_gone(title, max_wait=3, interval=0.2)
                 if result["gone"]:
                     return f"Done, I've closed {title}."
-                else:
-                    return f"I sent the close signal to {title}, but it may still be open (save dialog?)."
             except ImportError:
+                import time
+                time.sleep(1)
+                remaining = gw.getWindowsWithTitle(title)
+                if not remaining:
+                    return f"Done, I've closed {title}."
+
+            # w.close() didn't work — try taskkill (needed for UWP apps like Calculator)
+            _UWP_PROCESS_MAP = {
+                "calculator": "CalculatorApp.exe",
+                "photos": "Microsoft.Photos.exe",
+                "movies": "Video.UI.exe",
+                "camera": "WindowsCamera.exe",
+                "maps": "Maps.exe",
+                "mail": "HxOutlook.exe",
+                "calendar": "HxCalendarAppImm.exe",
+                "store": "WinStore.App.exe",
+            }
+            title_lower = title.lower()
+            proc_name = _UWP_PROCESS_MAP.get(title_lower)
+            if not proc_name:
+                # Generic: try "title.exe" pattern
+                for key, val in _UWP_PROCESS_MAP.items():
+                    if key in title_lower:
+                        proc_name = val
+                        break
+
+            if proc_name:
+                import subprocess
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", proc_name],
+                    capture_output=True, timeout=5)
+            else:
+                # Generic fallback: Alt+F4 on focused window
+                import pyautogui
+                remaining = gw.getWindowsWithTitle(title)
+                if remaining:
+                    try:
+                        remaining[0].activate()
+                        import time
+                        time.sleep(0.3)
+                        pyautogui.hotkey("alt", "F4")
+                    except Exception:
+                        pass
+
+            # Final verification
+            import time
+            time.sleep(0.5)
+            still_open = gw.getWindowsWithTitle(title)
+            if not still_open:
                 return f"Done, I've closed {title}."
+            return f"I sent the close signal to {title}, but it may still be open."
+
         return f"I couldn't find a window called {title}. Is it running?"
     except Exception as e:
         logging.error(f"Error closing window: {e}")

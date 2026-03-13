@@ -1283,6 +1283,43 @@ class Brain:
             except Exception:
                 pass
 
+        # --- Reminder fast-path: bypass strategy selector for reliability ---
+        # list_reminders and set_reminder are pure local ops — no LLM or strategy
+        # overhead needed. Pattern-match here before handing off to selector.
+        _ui_lower = user_input.lower().strip()
+        if _re.search(r'\b(?:list|show|check|what(?:\'s|\s+are)?\s+(?:my\s+)?)reminders?\b', _ui_lower):
+            logger.info("Direct dispatch: list_reminders (fast-path)")
+            result = execute_tool("list_reminders", {}, self.action_registry,
+                                  reminder_mgr=getattr(self, 'reminder_mgr', None))
+            if result:
+                return str(result)
+
+        _reminder_set_match = _re.search(
+            r'(?:remind\s+me\s+(?:to\s+)?(.+?)\s+(?:at|in|on)\s+(.+)'
+            r'|set\s+(?:a\s+)?reminder\s+(?:for\s+)?(.+?)\s+(?:to|for)\s+(.+)'
+            r'|set\s+(?:a\s+)?reminder\s+(?:to\s+)(.+?)(?:\s+(?:at|in|on)\s+(.+))?$)',
+            _ui_lower,
+        )
+        if _reminder_set_match:
+            g = _reminder_set_match.groups()
+            # Groups differ by which branch matched; pick first non-None pair
+            if g[0] is not None:   # remind me to X at/in Y
+                msg, t = g[0].strip(), g[1].strip()
+            elif g[2] is not None: # set a reminder for X to/for Y
+                msg, t = g[3].strip(), g[2].strip()
+            else:                  # set a reminder to X [at/in Y]
+                msg = g[4].strip()
+                t = (g[5] or "in 1 hour").strip()
+            if msg and t:
+                logger.info(f"Direct dispatch: set_reminder fast-path — '{msg}' at '{t}'")
+                result = execute_tool(
+                    "set_reminder", {"message": msg, "time": t},
+                    self.action_registry,
+                    reminder_mgr=getattr(self, 'reminder_mgr', None),
+                )
+                if result:
+                    return str(result)
+
         # --- StrategySelector: tries CLI → API → WEBSITE → TOOL → UIA → CDP ---
         selector = get_selector()
         execute_tool._last_user_input = user_input
