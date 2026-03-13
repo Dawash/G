@@ -125,6 +125,67 @@ _RE_ACTION_WORDS = re.compile(
 _RE_TIME_DATE = re.compile(r'\b(what|the) (time|date|day)\b', re.I)
 _RE_SYSTEM_QUERY = re.compile(r'\b(my |check |how much |what\'?s? my )(ram|cpu|disk|time)\b', re.I)
 
+# Pre-compiled patterns for real-time/factual questions that need web search fallback
+_RE_REALTIME_QUESTION = re.compile(
+    r'\b(?:'
+    r'current (?:price|stock|value|population|temperature|weather|status|rate|score)'
+    r'|(?:price|stock price|market cap|exchange rate) of\b'
+    r'|latest (?:score|news|results?|update|version|release|data)'
+    r'|(?:today\'?s?|tonight\'?s?|yesterday\'?s?) (?:score|news|results?|price|weather|game|match)'
+    r'|what happened (?:today|yesterday|this week|last night)'
+    r'|breaking news'
+    r'|who (?:won|lost|is winning|scored|leads?) (?:the |last night|today|yesterday)?'
+    r'|(?:how much|what) (?:is|are|does) .{0,30}(?:cost|worth|trading|priced)'
+    r'|(?:live|real[- ]?time|up[- ]?to[- ]?date|right now)\b'
+    r'|(?:bitcoin|btc|ethereum|eth|stock|nasdaq|s&p|dow jones|crypto)\b.*\b(?:price|value|worth|at)\b'
+    r'|(?:price|value|worth|at)\b.*\b(?:bitcoin|btc|ethereum|eth|stock|nasdaq|s&p|dow jones|crypto)\b'
+    r'|current (?:president|pm|prime minister|ceo|leader) of\b'
+    r'|(?:election|game|match|fight|race) results?\b'
+    r')',
+    re.I
+)
+
+# Phrases that indicate the LLM knows it cannot answer (weak/hedged response)
+_LLM_WEAK_ANSWER_PHRASES = (
+    "don't have real-time",
+    "don't have access to real-time",
+    "can't provide current",
+    "can't access current",
+    "cannot provide real-time",
+    "cannot access real-time",
+    "my knowledge cutoff",
+    "as of my last update",
+    "as of my last training",
+    "as of my training",
+    "i don't have access to live",
+    "i can't browse",
+    "unable to provide real-time",
+    "don't have the ability to access",
+    "not able to provide current",
+    "i recommend checking",
+    "please check a",
+    "i suggest checking",
+    "for the latest",
+    "for up-to-date",
+    "for real-time",
+    "i cannot browse the internet",
+    "i don't have internet access",
+)
+
+
+def _is_realtime_question(text):
+    """Check if a question asks about real-time or current factual data."""
+    return bool(_RE_REALTIME_QUESTION.search(text))
+
+
+def _is_weak_llm_answer(answer):
+    """Check if the LLM's answer admits it cannot provide current information."""
+    if not answer:
+        return False
+    lower = answer.lower()
+    return any(phrase in lower for phrase in _LLM_WEAK_ANSWER_PHRASES)
+
+
 # ===================================================================
 # Shared runtime state (Phase 2 migration — replaces module globals)
 # ===================================================================
@@ -315,7 +376,7 @@ def _play_music(action, query=None, app="spotify"):
                             quick_chat_fn=quick_chat_fn)
 
 
-def _run_agent_with_timeout(goal, timeout=20, blocking=True):
+def _run_agent_with_timeout(goal, timeout=3600, blocking=True):
     """Run desktop agent with a timeout to prevent blocking Ollama.
 
     If blocking=False, fires agent in background thread and returns immediately.
@@ -1028,11 +1089,11 @@ def _execute_tool_inner(tool_name, arguments, action_registry, reminder_mgr=None
             try:
                 with ThreadPoolExecutor(max_workers=1) as pool:
                     future = pool.submit(agent.execute, goal)
-                    result = future.result(timeout=30)
+                    result = future.result(timeout=3600)
                 return result or "Task completed."
             except FuturesTimeout:
                 agent.cancel()  # Signal agent to stop — frees Ollama
-                logger.warning(f"agent_task timed out after 30s: {goal[:60]}")
+                logger.warning(f"agent_task timed out after 3600s: {goal[:60]}")
                 return "Task took too long. Some steps may have completed."
 
         # spawn_agents, chain_tasks, reason_deeply, delegate_task handlers removed
@@ -1127,7 +1188,7 @@ def _auto_escalate_to_agent(tool_name, arguments, what_done, what_missing, user_
     if action_registry:
         execute_tool._action_registry = action_registry
     # Run agent to finish the partially completed task
-    result = _run_agent_with_timeout(goal, timeout=40, blocking=True)
+    result = _run_agent_with_timeout(goal, timeout=3600, blocking=True)
     _brain_state.reset_escalation()
     if result:
         return result
@@ -1617,10 +1678,59 @@ class Brain:
             and not _RE_SYSTEM_QUERY.search(user_input)
         )
         if _no_tool_needed and len(user_input.split()) <= 20:
-            logger.info(f"Direct dispatch: quick_chat (pure knowledge question)")
+            # Check if this is a real-time question before even asking the LLM
+            _needs_realtime = _is_realtime_question(user_input)
+
+            if _needs_realtime:
+                # Real-time question: try web search first for fresh data
+                logger.info("Direct dispatch: real-time question detected, trying web search first")
+                try:
+                    from web_agent import web_search_extract
+                    web_result = web_search_extract(user_input)
+                    if web_result and len(web_result) > 20 and "couldn't find" not in web_result.lower():
+                        # Naturalize the web result through LLM for a conversational answer
+                        try:
+                            natural = self.quick_chat(
+                                f"The user asked: \"{user_input}\"\n"
+                                f"Here is the latest information from the web:\n{web_result[:1500]}\n\n"
+                                "Give a short, direct answer based on this web data. "
+                                "Include the specific numbers/facts. Be conversational."
+                            )
+                            if natural and len(natural) > 10:
+                                return natural
+                        except Exception:
+                            pass
+                        return web_result
+                except Exception as e:
+                    logger.debug(f"Web search fallback failed for real-time question: {e}")
+
+            # Try LLM quick_chat for knowledge questions
+            logger.info("Direct dispatch: quick_chat (pure knowledge question)")
             try:
                 answer = self.quick_chat(user_input)
                 if answer and len(answer) > 5:
+                    # Check if the LLM admitted it can't answer (weak response)
+                    if _is_weak_llm_answer(answer):
+                        logger.info("LLM gave weak answer, falling back to web search")
+                        try:
+                            from web_agent import web_search_extract
+                            web_result = web_search_extract(user_input)
+                            if web_result and len(web_result) > 20 and "couldn't find" not in web_result.lower():
+                                # Naturalize web result for conversational delivery
+                                try:
+                                    natural = self.quick_chat(
+                                        f"The user asked: \"{user_input}\"\n"
+                                        f"Here is the latest information from the web:\n{web_result[:1500]}\n\n"
+                                        "Give a short, direct answer based on this web data. "
+                                        "Include the specific numbers/facts. Be conversational."
+                                    )
+                                    if natural and len(natural) > 10:
+                                        return natural
+                                except Exception:
+                                    pass
+                                return web_result
+                        except Exception as e:
+                            logger.debug(f"Web search fallback failed after weak LLM answer: {e}")
                     return answer
             except Exception:
                 pass

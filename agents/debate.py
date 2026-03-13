@@ -44,7 +44,7 @@ MAX_DEBATE_ROUNDS = 2  # Cross-examination rounds
 MIN_LLM_BUDGET_FOR_DEBATE = 15  # Skip if fewer than 15 LLM calls remaining
 
 # Maximum LLM calls for the whole swarm (mirrors orchestrator.py constant)
-MAX_LLM_CALLS = 40
+MAX_LLM_CALLS = 999
 
 
 class DebateAgent(BaseAgent):

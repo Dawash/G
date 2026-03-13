@@ -22,9 +22,9 @@ from .blackboard import PlanNode
 logger = logging.getLogger(__name__)
 
 # Max attempts per single step before giving up
-MAX_STEP_ATTEMPTS = 3
+MAX_STEP_ATTEMPTS = 10
 # Max time for a single step (seconds)
-STEP_TIMEOUT = 120
+STEP_TIMEOUT = 300
 
 
 class ExecutorAgent(BaseAgent):

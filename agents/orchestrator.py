@@ -32,14 +32,14 @@ from .debate import DebateAgent
 
 logger = logging.getLogger(__name__)
 
-# Max total actions before forced abort (cost control for local LLMs)
-MAX_TOTAL_ACTIONS = 30
-# Max total LLM calls (budget control)
-MAX_LLM_CALLS = 40
-# Max replans before abort
-MAX_REPLANS = 3
-# Max total time (seconds)
-MAX_TOTAL_TIME = 300
+# Max total actions before forced abort (very high — let agents work until done)
+MAX_TOTAL_ACTIONS = 999
+# Max total LLM calls (very high — no artificial limit)
+MAX_LLM_CALLS = 999
+# Max replans before abort (generous — allow many retries)
+MAX_REPLANS = 20
+# Max total time (seconds) — 1 hour
+MAX_TOTAL_TIME = 3600
 
 
 class SwarmOrchestrator:

@@ -211,7 +211,7 @@ def get_webpage_title(url):
 # Deep Research — multi-step research with citations and source scoring
 # ===================================================================
 
-def deep_research(query, llm_fn=None, max_sources=6, max_follow_links=3, max_time=30):
+def deep_research(query, llm_fn=None, max_sources=6, max_follow_links=3, max_time=120):
     """Multi-step research with citation tracking and source scoring.
 
     Steps:

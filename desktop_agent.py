@@ -43,8 +43,8 @@ def _log_agent_action(action, result, success=True):
 # Configuration
 # ===================================================================
 
-MAX_AGENT_TURNS = 15          # Max observe-think-act cycles per task
-MAX_RECOVERY_ATTEMPTS = 2     # Max tries to fix a single problem
+MAX_AGENT_TURNS = 100         # Max observe-think-act cycles per task (generous limit)
+MAX_RECOVERY_ATTEMPTS = 10    # Max tries to fix a single problem
 AFTER_ACTION_WAIT = 1.0       # Seconds to wait for UI to settle after action
 def _get_ollama_url():
     """Get the Ollama URL from config, with fallback to default."""

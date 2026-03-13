@@ -320,9 +320,9 @@ class AgentState:
     running: bool = False
     current_goal: Optional[str] = None
     current_step: int = 0
-    max_steps: int = 15
-    max_retries: int = 3
-    max_diagnosis_rounds: int = 2
+    max_steps: int = 100
+    max_retries: int = 10
+    max_diagnosis_rounds: int = 10
     last_plan: list = field(default_factory=list)
     last_result: Optional[str] = None
     step_traces: list = field(default_factory=list)

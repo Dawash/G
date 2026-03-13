@@ -63,7 +63,7 @@ def run_agent_mode(user_input, action_registry, reminder_mgr, speak_fn,
 
     Runs agent in background thread while monitoring mic for interruption.
     User can say 'stop', 'cancel', 'abort' to halt agent mid-task.
-    Max 90s timeout. Agent uses llava vision + LLM reasoning.
+    No hard timeout — agent runs until task is complete. Agent uses llava vision + LLM reasoning.
 
     When *brain* is provided and the task matches complex multi-step patterns
     (e.g. "research X and write Y"), SwarmOrchestrator is tried first.

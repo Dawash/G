@@ -25,10 +25,10 @@ REVIEW_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "improveme
 @dataclass
 class ImprovementBudget:
     """Resource limits for a single improvement cycle."""
-    max_seconds: float = 60.0
-    max_web_requests: int = 3
-    max_llm_calls: int = 2
-    max_improvements_per_cycle: int = 3
+    max_seconds: float = 3600.0
+    max_web_requests: int = 999
+    max_llm_calls: int = 999
+    max_improvements_per_cycle: int = 999
 
 
 class BudgetedRunner:
