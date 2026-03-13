@@ -1502,6 +1502,18 @@ class Brain:
                 except Exception:
                     pass
 
+        # --- Percentage fast-path: "what is 15% of 200", "calculate 20% of 500" ---
+        _pct_match = _re.search(
+            r'(?:what\s+is\s+|calculate\s+|find\s+)?(\d+(?:\.\d+)?)\s*%\s*of\s+(\d+(?:\.\d+)?)',
+            _ui_lower
+        )
+        if _pct_match:
+            pct = float(_pct_match.group(1))
+            total = float(_pct_match.group(2))
+            result_val = pct / 100.0 * total
+            logger.info(f"Direct dispatch: percentage fast-path ({pct}% of {total} = {result_val:g})")
+            return f"{pct:g}% of {total:g} = {result_val:g}"
+
         # --- Unit conversion fast-path: "convert 100 fahrenheit to celsius" ---
         _conv_match = _re.search(
             r'(?:convert\s+)?(\d+(?:\.\d+)?)\s*(?:degrees?\s+)?'
@@ -1512,8 +1524,14 @@ class Brain:
         )
         if _conv_match:
             val = float(_conv_match.group(1))
-            src = _conv_match.group(2).rstrip('s')
-            dst = _conv_match.group(3).rstrip('s')
+            # Normalize: strip plural 's' but not from words ending in 'us' (celsius)
+            def _norm_unit(u):
+                u = u.lower()
+                if u.endswith('s') and not u.endswith('us'):
+                    u = u[:-1]
+                return u
+            src = _norm_unit(_conv_match.group(2))
+            dst = _norm_unit(_conv_match.group(3))
             conversions = {
                 ('fahrenheit', 'celsius'): lambda v: (v - 32) * 5/9,
                 ('f', 'c'): lambda v: (v - 32) * 5/9,
