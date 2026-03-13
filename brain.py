@@ -1705,9 +1705,9 @@ class Brain:
         # --- Unit conversion fast-path: "convert 100 fahrenheit to celsius" ---
         _conv_match = _re.search(
             r'(?:convert\s+)?(\d+(?:\.\d+)?)\s*(?:degrees?\s+)?'
-            r'(fahrenheit|celsius|centimeters?|cm|kilometers?|km|miles?|kilograms?|kg|pounds?|lbs?|grams?|meters?|feet|foot|ft|inches?|m|g|f|c)'
+            r'(fahrenheit|celsius|centimeters?|cm|kilometers?|km|millimeters?|mm|miles?|kilograms?|kg|pounds?|lbs?|grams?|meters?|feet|foot|ft|inches?|inch|m|g|f|c)'
             r'\s+(?:to|in)\s+'
-            r'(fahrenheit|celsius|centimeters?|cm|kilometers?|km|miles?|kilograms?|kg|pounds?|lbs?|grams?|meters?|feet|foot|ft|inches?|m|g|f|c)',
+            r'(fahrenheit|celsius|centimeters?|cm|kilometers?|km|millimeters?|mm|miles?|kilograms?|kg|pounds?|lbs?|grams?|meters?|feet|foot|ft|inches?|inch|m|g|f|c)',
             _ui_lower
         )
         if _conv_match:
@@ -1726,6 +1726,7 @@ class Brain:
                     'mile': 'mile', 'meter': 'm',
                     'foot': 'ft', 'feet': 'ft',
                     'inch': 'inch', 'inche': 'inch',  # "inches" -> strip 's' -> "inche"
+                    'millimeter': 'mm',
                 }
                 return _aliases.get(u, u)
             src = _norm_unit(_conv_match.group(2))
@@ -1757,6 +1758,16 @@ class Brain:
                 # Distance: m <-> cm
                 ('m', 'cm'): lambda v: v * 100,
                 ('cm', 'm'): lambda v: v / 100,
+                # Distance: m <-> inch
+                ('m', 'inch'): lambda v: v * 39.3701,
+                ('inch', 'm'): lambda v: v / 39.3701,
+                # Distance: mm
+                ('mm', 'cm'): lambda v: v / 10,
+                ('cm', 'mm'): lambda v: v * 10,
+                ('mm', 'm'): lambda v: v / 1000,
+                ('m', 'mm'): lambda v: v * 1000,
+                ('mm', 'inch'): lambda v: v / 25.4,
+                ('inch', 'mm'): lambda v: v * 25.4,
                 # Distance: inch <-> cm
                 ('inch', 'cm'): lambda v: v * 2.54,
                 ('cm', 'inch'): lambda v: v / 2.54,
