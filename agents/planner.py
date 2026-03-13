@@ -241,19 +241,46 @@ class PlannerAgent(BaseAgent):
         )
 
         raw = self._llm_call(prompt)
+        return self._parse_approaches(raw)
+
+    def _parse_approaches(self, raw: str) -> list:
+        """Parse LLM output into list of approach dicts, with robust fallback."""
+        # Strip markdown code blocks
+        cleaned = re.sub(r'```(?:json)?\s*', '', raw).strip()
+
+        # Try JSON parse
         try:
-            # Extract JSON array
-            match = re.search(r'\[.*\]', raw, re.DOTALL)
+            match = re.search(r'\[.*\]', cleaned, re.DOTALL)
             if match:
                 approaches = json.loads(match.group())
-                return [a for a in approaches if isinstance(a, dict) and "approach" in a]
+                result = [a for a in approaches if isinstance(a, dict) and "approach" in a]
+                if result:
+                    return result
         except (json.JSONDecodeError, ValueError):
             pass
 
-        # Fallback: extract approaches from text
+        # Try line-by-line JSON objects
+        approaches = []
+        for line in cleaned.split("\n"):
+            line = line.strip().rstrip(",")
+            if line.startswith("{") and "approach" in line:
+                try:
+                    obj = json.loads(line)
+                    if isinstance(obj, dict) and "approach" in obj:
+                        approaches.append(obj)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+        if approaches:
+            return approaches[:BRANCH_FACTOR]
+
+        # Last fallback: numbered list extraction
         approaches = []
         for line in raw.split("\n"):
-            line = line.strip().lstrip("0123456789.-) ")
+            line = line.strip().lstrip("0123456789.-) *")
+            # Skip lines that look like JSON keys
+            if line.startswith("{") or line.startswith("["):
+                continue
             if line and len(line) > 10:
                 approaches.append({"approach": line})
         return approaches[:BRANCH_FACTOR]
@@ -345,9 +372,11 @@ class PlannerAgent(BaseAgent):
 
     def _parse_plan_json(self, raw: str, goal: str) -> list:
         """Parse LLM output into PlanNode list."""
+        # Strip markdown code blocks
+        cleaned = re.sub(r'```(?:json)?\s*', '', raw).strip()
         plan = []
         try:
-            match = re.search(r'\[.*\]', raw, re.DOTALL)
+            match = re.search(r'\[.*\]', cleaned, re.DOTALL)
             if match:
                 steps = json.loads(match.group())
                 for s in steps[:MAX_PLAN_STEPS]:

@@ -258,6 +258,7 @@ class ReminderManager:
         """Return list of reminders that are due now."""
         now = time.time()
         stale_cutoff = now - 48 * 3600  # 48 hours ago
+        recurring_stale_cutoff = now - 7 * 24 * 3600  # 7 days ago for recurring
         due = []
         stale_deactivated = 0
 
@@ -273,12 +274,31 @@ class ReminderManager:
                         r.active = False
                         stale_deactivated += 1
                         continue
+                    # Silently deactivate recurring reminders >7 days overdue
+                    # (prevents infinite pile-up of daily/weekly reminders)
+                    if r.recurrence and r.trigger_time < recurring_stale_cutoff:
+                        r.active = False
+                        stale_deactivated += 1
+                        continue
                     due.append(r)
             if stale_deactivated:
-                logger.info(f"Silently deactivated {stale_deactivated} stale reminder(s) (>48h overdue)")
+                logger.info(f"Silently deactivated {stale_deactivated} stale reminder(s) (overdue)")
                 self._save()
 
         return due
+
+    def clear_all_overdue(self):
+        """Deactivate all overdue reminders. Returns count cleared."""
+        now = time.time()
+        cleared = 0
+        with self._lock:
+            for r in self.reminders:
+                if r.active and now >= r.trigger_time:
+                    r.active = False
+                    cleared += 1
+            if cleared:
+                self._save()
+        return cleared
 
     def fire_reminder(self, reminder):
         """Handle a fired reminder — reschedule or deactivate."""
@@ -386,23 +406,16 @@ class ReminderManager:
 
                 # First check cycle: batch >2 overdue reminders into one announcement
                 if self._first_check and len(due) > 2:
-                    labels = [r.message for r in due]
+                    # Show max 10 labels to avoid flooding
+                    labels = [r.message for r in due[:10]]
+                    if len(due) > 10:
+                        labels.append(f"and {len(due) - 10} more")
                     batch_msg = f"You have {len(due)} overdue reminders: {', '.join(labels)}."
                     logger.info(f"Startup batch: {len(due)} overdue reminders")
                     print(f"\n[REMINDER] Batch: {batch_msg}")
+                    # Fire (deactivate/reschedule) all overdue — skip action execution
+                    # for stale batch (executing old actions like "shut down" is dangerous)
                     for r in due:
-                        # Execute action-based reminders silently
-                        if r.action_type == "execute" and r.action_command:
-                            try:
-                                from brain import execute_tool
-                                execute_tool(
-                                    r.action_command,
-                                    r.action_args or {},
-                                    action_registry=self._action_registry or {},
-                                    reminder_mgr=self,
-                                )
-                            except Exception as e:
-                                logger.error(f"Reminder action failed: {e}")
                         self.fire_reminder(r)
                     with self._lock:
                         self._pending_announcements.append(batch_msg)

@@ -149,13 +149,54 @@ def install_package(pip_name):
     return result.returncode == 0
 
 
+def _deps_cache_valid():
+    """Check if dependency cache is still valid (requirements.txt unchanged)."""
+    cache_file = os.path.join(PROJECT_DIR, ".deps_ok")
+    req_file = os.path.join(PROJECT_DIR, "requirements.txt")
+    if not os.path.isfile(cache_file) or not os.path.isfile(req_file):
+        return False
+    try:
+        import hashlib
+        with open(req_file, "rb") as f:
+            req_hash = hashlib.md5(f.read()).hexdigest()
+        with open(cache_file, "r") as f:
+            cached = f.read().strip()
+        return cached == f"{sys.executable}:{req_hash}"
+    except Exception:
+        return False
+
+
+def _write_deps_cache():
+    """Write dependency cache marker."""
+    try:
+        import hashlib
+        req_file = os.path.join(PROJECT_DIR, "requirements.txt")
+        with open(req_file, "rb") as f:
+            req_hash = hashlib.md5(f.read()).hexdigest()
+        with open(os.path.join(PROJECT_DIR, ".deps_ok"), "w") as f:
+            f.write(f"{sys.executable}:{req_hash}")
+    except Exception:
+        pass
+
+
 def check_dependencies():
     """Check and install missing dependencies.
 
-    Strategy: first try full requirements.txt (fast, all-or-nothing),
-    then verify individual required packages, then optionals.
+    Strategy: skip pip if cache says deps are up to date,
+    otherwise try full requirements.txt then verify individually.
     """
     print("\n[DEPS] Checking dependencies...")
+
+    # --- Fast path: if requirements.txt hasn't changed, skip pip entirely ---
+    if _deps_cache_valid():
+        # Quick verify: spot-check a few key imports
+        try:
+            import requests, numpy, PIL, rapidfuzz  # noqa: F401
+            print("  [OK] All packages verified (cached)")
+            print("[OK] Dependencies ready\n")
+            return
+        except ImportError:
+            pass  # Cache stale, fall through
 
     # --- Step 1: Full requirements.txt install (catches everything) ---
     req_file = os.path.join(PROJECT_DIR, "requirements.txt")
@@ -200,6 +241,7 @@ def check_dependencies():
                     print(f"  [NOTE] PyAudio failed to install. Microphone may not work.")
                     print(f"         On Windows, try: pip install pyaudio --only-binary=:all:")
 
+    _write_deps_cache()
     print("[OK] Dependencies ready\n")
 
 

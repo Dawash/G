@@ -13,7 +13,13 @@ import sys
 import tempfile
 import threading
 import time
+import warnings
 import wave
+
+# Suppress noisy warnings from torch/pyannote/torchcodec before any torch import
+warnings.filterwarnings("ignore", message=".*torchcodec.*")
+warnings.filterwarnings("ignore", module="pyannote")
+
 import pyttsx3
 import speech_recognition as sr
 import numpy as np
