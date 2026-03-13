@@ -110,7 +110,7 @@ _LANG_PATTERN = re.compile(
 # Pre-compiled patterns for knowledge question detection (hot path in _try_direct_dispatch)
 _RE_KNOWLEDGE_START = re.compile(
     r'^(?:what\'?s?|who\'?s?|where|when|why|how|explain|tell me|define|describe'
-    r'|translate|say|calculate|solve|give me|list|name|can you)\b', re.I
+    r'|translate|say|calculate|solve|give me|list|name|can you|convert)\b', re.I
 )
 _RE_ACTION_WORDS = re.compile(
     r'\b(open|close|launch|install|set|create|send|search for|files?|apps?'
