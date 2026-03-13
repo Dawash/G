@@ -77,15 +77,27 @@ The AI brain powered by Ollama (local, free) with smart model scaling — suppor
 ### Desktop Agent (Agentic Mode)
 For complex multi-step tasks, G plans and executes autonomously:
 
+**Simple agent tasks** use the legacy 3-phase loop:
 ```
 Plan → Observe (screenshot) → Think → Act → Verify → Diagnose if failed
 ```
 
+**Complex multi-step tasks** (updated Mar 2026) use the **5-agent swarm**:
+```
+PlannerAgent (Tree-of-Thoughts) → ExecutorAgent → CriticAgent → ResearcherAgent → MemoryAgent
+```
+
+The swarm generates 3 candidate approaches, scores them via LLM, decomposes the best into executable steps, and runs them with periodic quality checks. If stuck, the researcher searches the web for solutions. On completion, the memory agent saves successful sequences as reusable skills.
+
 - **UI-interactive tasks** auto-route to agent mode (Spotify, YouTube, ordering, login flows)
+- **Multi-agent swarm** for complex tasks — 5 specialized agents with shared blackboard
+- **Budget controls** — max 30 actions, 40 LLM calls, 300s timeout, 3 replans
 - Silent execution — thinks in console, speaks only the result
 - Self-healing with web research when stuck
 - Voyager-style skill library saves successful action sequences
-- Spotify/YouTube no-results detection and retry with different approach
+- Reflexion learning — failure lessons stored for future avoidance
+- Code interpreter — safe Python sandbox for math/data tasks
+- Configurable per-tool timeouts via `config.json`
 
 ### Persistent Memory
 - SQLite-backed long-term memory
@@ -322,6 +334,7 @@ G/
 ├── self_test.py            # Runtime diagnostics
 ├── requirements.txt        # Python dependencies
 │
+├── agents/                 # Multi-agent swarm (5 agents + blackboard + orchestrator)
 ├── automation/             # Browser drivers, CDP, observers
 ├── core/                   # Control flags, metrics, state
 ├── dashboard/              # PyQt6 GUI dashboard
@@ -332,7 +345,7 @@ G/
 ├── orchestration/          # Assistant loop, routing, recovery
 ├── platform_impl/          # Windows-specific implementations
 ├── sounds/                 # Alarm audio files
-└── tools/                  # Tool registry, executors, audit
+└── tools/                  # Tool registry, executors, code interpreter
 ```
 
 ## Tech Stack

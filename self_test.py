@@ -169,6 +169,104 @@ def _test_cognitive():
         return False, str(e)
 
 
+def _test_mode_classification():
+    """Test that the mode classifier correctly routes quick/agent/research."""
+    try:
+        from llm.mode_classifier import classify_mode
+        cases = [
+            ("what time is it", "quick"),
+            ("open notepad", "quick"),
+            ("play lofi music on youtube", "agent"),
+            ("order pizza from dominos", "agent"),
+        ]
+        failures = []
+        for text, expected in cases:
+            result = classify_mode(text)
+            if result.mode != expected:
+                failures.append(f"'{text}' -> {result.mode} (expected {expected})")
+        if failures:
+            return False, "; ".join(failures)
+        return True, f"All {len(cases)} cases routed correctly"
+    except Exception as e:
+        return False, str(e)
+
+
+def _test_swarm_init():
+    """Test SwarmOrchestrator instantiation with a mock brain."""
+    try:
+        from agents.orchestrator import SwarmOrchestrator
+
+        class MockBrain:
+            action_registry = {}
+            def quick_chat(self, prompt):
+                return "mock response"
+
+        orch = SwarmOrchestrator(MockBrain())
+        agents_ok = []
+        for attr, name in [
+            ("_planner", "planner"),
+            ("_critic", "critic"),
+            ("_executor", "executor"),
+            ("_researcher", "researcher"),
+            ("_memory", "memory"),
+        ]:
+            if hasattr(orch, attr) and getattr(orch, attr) is not None:
+                agents_ok.append(name)
+            else:
+                return False, f"Missing agent: {name}"
+        return True, f"All 5 agents initialized: {', '.join(agents_ok)}"
+    except Exception as e:
+        return False, str(e)
+
+
+def _test_planner_classification():
+    """Test PlannerAgent._classify() complexity routing."""
+    try:
+        from agents.planner import PlannerAgent
+        from agents.blackboard import Blackboard
+
+        planner = PlannerAgent(llm_fn=lambda p: "", blackboard=Blackboard())
+        cases = [
+            ("open notepad", "simple"),
+            ("open chrome and go to youtube", "compound"),
+            ("research flights and book cheapest then email itinerary", "complex"),
+        ]
+        failures = []
+        for text, expected in cases:
+            result = planner._classify(text)
+            if result != expected:
+                failures.append(f"'{text}' -> {result} (expected {expected})")
+        if failures:
+            return False, "; ".join(failures)
+        return True, f"All {len(cases)} classifications correct"
+    except Exception as e:
+        return False, str(e)
+
+
+def _test_code_interpreter():
+    """Test code execution sandbox: success and safety blocking."""
+    try:
+        from tools.code_interpreter import execute_code
+
+        # Test 1: valid math
+        result = execute_code("print(2+2)")
+        if not result["success"]:
+            return False, f"Math failed: {result['error']}"
+        if result["output"].strip() != "4":
+            return False, f"Expected '4', got '{result['output']}'"
+
+        # Test 2: safety — os.system should be blocked
+        result2 = execute_code('import os; os.system("dir")')
+        if result2["success"]:
+            return False, "os.system was NOT blocked (should be)"
+        if "safety" not in result2["error"].lower() and "block" not in result2["error"].lower():
+            return False, f"Unexpected error type: {result2['error']}"
+
+        return True, "Math OK + os.system blocked"
+    except Exception as e:
+        return False, str(e)
+
+
 # All tests
 ALL_TESTS = [
     ("Imports: config", lambda: _test_import("config")),
@@ -188,13 +286,18 @@ ALL_TESTS = [
     ("Whisper STT", _test_whisper),
     ("gTTS", _test_gtts),
     ("Cognitive Engine", _test_cognitive),
+    ("Mode Classification", _test_mode_classification),
+    ("Swarm Init", _test_swarm_init),
+    ("Planner Classification", _test_planner_classification),
+    ("Code Interpreter", _test_code_interpreter),
 ]
 
 # Tests safe to run in parallel
 _PARALLEL = {
     "Imports: config", "Imports: ai_providers", "Imports: speech",
     "Imports: intent", "Imports: brain", "Config", "Whisper STT", "gTTS",
-    "Cognitive Engine",
+    "Cognitive Engine", "Mode Classification", "Swarm Init",
+    "Planner Classification", "Code Interpreter",
 }
 
 

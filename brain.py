@@ -2104,25 +2104,13 @@ class Brain:
         else:
             logger.info(f"Agent mode: skipping strategy shortcut for UI task '{user_input[:40]}'")
 
-        # --- Multi-Agent Swarm for complex tasks ---
-        if _complex_task or _ui_interactive:
-            try:
-                from agents.orchestrator import SwarmOrchestrator
-                swarm = SwarmOrchestrator(self, speak_fn=self.speak_fn)
-                result = swarm.execute(user_input)
-                if result and "error" not in str(result).lower()[:30]:
-                    logger.info(f"Swarm completed: {user_input[:40]}")
-                    return result
-                # Swarm failed — fall through to legacy agent
-                logger.info(f"Swarm partial/failed, falling back to legacy agent")
-            except Exception as e:
-                logger.warning(f"Swarm orchestrator failed: {e}, falling back to legacy agent")
-
+        # Agent runner handles Swarm routing for complex tasks + legacy fallback
         from orchestration.agent_runner import run_agent_mode
         return run_agent_mode(
             user_input, self.action_registry, self.reminder_mgr,
             self.speak_fn, messages=self.messages,
             skip_strategies=_tried_strategies,
+            brain=self,
         )
 
     def _run_research(self, user_input):

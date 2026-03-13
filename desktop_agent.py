@@ -557,7 +557,7 @@ class DesktopAgent:
         self._success_criteria = ""  # Extracted from plan output
         self._obs_cache = None         # Cached observation result
         self._obs_cache_time = 0       # When observation was cached
-        self._obs_cache_ttl = 2.5      # Cache TTL in seconds
+        self._obs_cache_ttl = 5.0      # Cache TTL in seconds
         self._obs_dirty = True         # True = must re-observe (action changed state)
         self._skip_strategies = set()  # Strategies already tried by caller (avoid retry)
 
@@ -2995,8 +2995,10 @@ class DesktopAgent:
 
         return outcome
 
-    # Per-tool timeout limits (seconds)
-    _TOOL_TIMEOUTS = {
+    # Per-tool timeout limits (seconds).
+    # Overrides can be set in config.json under the "tool_timeouts" key
+    # (dict mapping tool name to timeout in seconds).
+    _TOOL_TIMEOUTS_DEFAULT = {
         "click_at": 3, "press_key": 3, "type_text": 5, "scroll": 3,
         "focus_window": 5, "open_app": 10, "close_app": 5,
         "search_in_app": 15, "google_search": 10, "run_command": 15,
@@ -3010,6 +3012,34 @@ class DesktopAgent:
         # Interactive (user waits to respond)
         "ask_user_choice": 60, "ask_user_input": 60, "ask_yes_no": 30,
     }
+    _TOOL_TIMEOUTS = None  # Populated lazily by _load_tool_timeouts()
+
+    @classmethod
+    def _load_tool_timeouts(cls):
+        """Merge default tool timeouts with any overrides from config.json.
+
+        Reads the ``tool_timeouts`` key from config.json (a dict mapping tool
+        names to timeout seconds) and merges it on top of the built-in defaults.
+        The result is cached on the class so the file is read only once.
+        """
+        if cls._TOOL_TIMEOUTS is not None:
+            return cls._TOOL_TIMEOUTS
+        merged = dict(cls._TOOL_TIMEOUTS_DEFAULT)
+        try:
+            cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+            if os.path.exists(cfg_path):
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                overrides = cfg.get("tool_timeouts")
+                if isinstance(overrides, dict):
+                    for tool, secs in overrides.items():
+                        if isinstance(secs, (int, float)) and secs > 0:
+                            merged[str(tool)] = secs
+        except Exception as e:
+            logging.getLogger("desktop_agent").debug(
+                f"Could not load tool_timeouts from config: {e}")
+        cls._TOOL_TIMEOUTS = merged
+        return cls._TOOL_TIMEOUTS
 
     def _act(self, decision):
         """Execute the action decided by the think step, with per-tool timeout.
@@ -3119,7 +3149,7 @@ class DesktopAgent:
             logger.debug(f"Orchestrator unavailable in agent: {e}")
 
         # Execute with per-tool timeout watchdog
-        timeout = self._TOOL_TIMEOUTS.get(tool_name, 15)
+        timeout = self._load_tool_timeouts().get(tool_name, 15)
         # Progress message for long operations
         if tool_name == "create_file" and timeout > 30:
             import threading

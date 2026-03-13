@@ -16,6 +16,15 @@ try:
 except ImportError:
     _HAS_CRYPTO = False
 
+# config.json supports these keys (among others):
+#   username, ai_name, provider, api_key / api_key_encrypted,
+#   ollama_url, ollama_model, language, stt_engine, web_remote,
+#   gateway_token, providers (dict), email_address, wake_up_time,
+#   wake_up_recurrence, cloud_model, first_run_done.
+#
+#   tool_timeouts  — optional dict mapping tool names to timeout seconds.
+#                    Used by desktop_agent.py to override default per-tool
+#                    timeouts. Example: {"run_terminal": 60, "open_app": 20}
 CONFIG_FILE = "config.json"
 CREDENTIALS_FILE = "credentials.csv"
 RESPONSE_FILE = "responses.json"
