@@ -1337,11 +1337,15 @@ class Brain:
             return str(result)
 
         # Pure knowledge/chat questions: skip tool calling, use quick_chat()
+        # Exclude only system-action words, not knowledge about those topics.
+        # "what is RAM" = knowledge (quick_chat), "how much RAM" = system (tool)
         _no_tool_needed = (
             _re.search(r'^(?:what\'?s?|who\'?s?|where|when|why|how|explain|tell me|define|describe|translate|say|calculate|solve|give me|list|name|can you)\b', user_input, _re.I)
-            and not _re.search(r'\b(open|close|launch|install|set|create|send|search|files?|apps?|download|reminders?|weather|forecast|news|screenshots?|ram|cpu|disk|time|alarms?|emails?|desktop|windows?|click|type|tabs?|processes?|battery|wifi|network)\b', user_input, _re.I)
+            and not _re.search(r'\b(open|close|launch|install|set|create|send|search for|files?|apps?|download|reminders?|weather|forecast|news|screenshots?|alarms?|emails?|desktop|windows?|click|type|tabs?|processes?|battery|wifi|network)\b', user_input, _re.I)
+            # Allow knowledge about tech topics (RAM, CPU, etc.) — only block system queries
+            and not _re.search(r'\b(my |check |how much |what\'?s? my )(ram|cpu|disk|time)\b', user_input, _re.I)
         )
-        if _no_tool_needed and len(user_input.split()) <= 15:
+        if _no_tool_needed and len(user_input.split()) <= 20:
             logger.info(f"Direct dispatch: quick_chat (pure knowledge question)")
             try:
                 answer = self.quick_chat(user_input)
@@ -1942,10 +1946,13 @@ class Brain:
             return None
 
         except requests.Timeout:
-            self._pop_user_message()
+            # Keep user message in context so next attempt has history
+            # Only pop if we want stateless retry (we don't — context matters)
             if self.provider_name == "ollama":
+                logger.warning("Brain: Ollama response timed out (streaming should prevent this)")
                 return ("That took too long. The model might still be loading. "
                         "Try again in a moment.")
+            self._pop_user_message()
             logger.warning("Brain API timed out")
             return None
 
@@ -2160,7 +2167,7 @@ class Brain:
 
         # Ollama speed optimizations
         if self.provider_name == "ollama":
-            payload["stream"] = False
+            payload["stream"] = True  # Stream tokens for no timeout issues
             # Scale context window based on model size
             _model_lower = (self.ollama_model or "").lower()
             if any(s in _model_lower for s in ("72b", "70b")):
@@ -2210,12 +2217,47 @@ class Brain:
             timeout = 15
 
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=timeout)
-            response.raise_for_status()
-            data = response.json()
             if self.provider_name == "ollama":
-                return data  # Native format: data["message"] accessible directly
-            return data["choices"][0]
+                # Streaming: read chunks with per-chunk timeout (no total timeout limit)
+                # Connect timeout = 5s, first-chunk timeout scales by model size
+                response = requests.post(url, headers=headers, json=payload,
+                                        timeout=timeout, stream=True)
+                response.raise_for_status()
+
+                # Accumulate streamed response
+                content_parts = []
+                tool_calls = []
+                last_data = None
+                for line in response.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    last_data = chunk
+                    msg = chunk.get("message", {})
+                    if msg.get("content"):
+                        content_parts.append(msg["content"])
+                    if msg.get("tool_calls"):
+                        tool_calls.extend(msg["tool_calls"])
+
+                response.close()
+
+                # Build final response in Ollama's expected format
+                if last_data:
+                    final_msg = last_data.get("message", {})
+                    final_msg["content"] = "".join(content_parts)
+                    if tool_calls:
+                        final_msg["tool_calls"] = tool_calls
+                    last_data["message"] = final_msg
+                    return last_data
+                return None
+            else:
+                response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+                response.raise_for_status()
+                data = response.json()
+                return data["choices"][0]
         except requests.HTTPError:
             raise  # Let the caller handle HTTP errors
         except (KeyError, IndexError, json.JSONDecodeError) as e:
@@ -2422,13 +2464,13 @@ class Brain:
                 # Timeout scales by model size (32b needs ~40s even for short responses)
                 _model_lower = (self.ollama_model or "").lower()
                 if any(s in _model_lower for s in ("72b", "70b")):
-                    _qc_timeout = 90
+                    _qc_timeout = 120
                 elif any(s in _model_lower for s in ("32b", "27b")):
-                    _qc_timeout = 60
+                    _qc_timeout = 90
                 elif any(s in _model_lower for s in ("14b", "13b")):
-                    _qc_timeout = 30
+                    _qc_timeout = 45
                 else:
-                    _qc_timeout = 15
+                    _qc_timeout = 20
                 resp = requests.post(
                     f"{self.ollama_url}/api/chat",
                     json={

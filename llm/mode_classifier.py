@@ -38,8 +38,8 @@ QUICK_PATTERNS = [
     re.compile(r"^(hey|hi|hello|good (morning|afternoon|evening)|how are you|thanks?|thank you)", re.I),
     re.compile(r"(introduce yourself|tell .+ about yourself|who are you|what can you do|what are you|describe yourself)", re.I),
     # Terminal / system info queries
-    re.compile(r"^(how much|check|what'?s? my) (disk|storage|ram|memory|cpu|battery)", re.I),
-    re.compile(r"^(what'?s? my|show my|check my) (ip|network|system|processes)", re.I),
+    re.compile(r"^(how much|check( my)?|what'?s? my) (disk|storage|ram|memory|cpu|battery)\b", re.I),
+    re.compile(r"^(what'?s? my|show my|check my) (ip|ip address|network|system|processes)\b", re.I),
     # Software management
     re.compile(r"^(install|uninstall|update)\s+\w+", re.I),
     # File operations
@@ -91,7 +91,7 @@ AGENT_PATTERNS = [
 
 # Direct tool patterns -- skip mode classification entirely for unambiguous requests
 DIRECT_TOOL_PATTERNS = [
-    (re.compile(r"(disk space|how much (ram|memory|cpu|storage)|my ip|ping |tracert|tasklist|git |docker |npm |pip |node |whoami)", re.I), "run_terminal"),
+    (re.compile(r"(disk space|how much (ram|memory|cpu|storage) (do i|does|is)|check my (ram|memory|cpu|disk|storage|battery|ip)|^my ip$|^my ip address$|^ping \w|^tracert \w|^tasklist$|^git \w|^docker \w|^npm \w|^pip \w|^node \w|^whoami$)", re.I), "run_terminal"),
     (re.compile(r"^(install|uninstall|update)\s+\w+$", re.I), "manage_software"),
     (re.compile(r"(move|copy|rename|delete|zip|find)\s+.*(file|folder|pdf|doc|screenshot|png|jpg|zip)", re.I), "manage_files"),
     (re.compile(r"(create|make|build|generate|write)\s+(a |an |me )?(simple |basic |beautiful )?(calculator|page|website|html|script|file|document|app|application|program|game|form|landing)", re.I), "create_file"),
