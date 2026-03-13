@@ -117,7 +117,7 @@ _RE_ACTION_WORDS = re.compile(
     r'|download|reminders?|weather|forecast|news|screenshots?|alarms?|emails?'
     r'|desktop|windows?|click|type|tabs?|processes?|battery|wifi|network)\b', re.I
 )
-_RE_TIME_DATE = re.compile(r'\b(what|the) (time|date)\b', re.I)
+_RE_TIME_DATE = re.compile(r'\b(what|the) (time|date|day)\b', re.I)
 _RE_SYSTEM_QUERY = re.compile(r'\b(my |check |how much |what\'?s? my )(ram|cpu|disk|time)\b', re.I)
 
 # ===================================================================
@@ -1356,6 +1356,27 @@ class Brain:
         if _re.search(r'\b(take|capture|grab|save)\s+(a\s+)?screenshot\b', _ui_lower):
             logger.info("Direct dispatch: take_screenshot (fast-path)")
             result = execute_tool("take_screenshot", {}, self.action_registry)
+            if result:
+                return str(result)
+
+        # --- Google search fast-path: "search for X on google" / "google X" ---
+        _search_match = _re.search(
+            r'^(?:search|google)\s+(?:for\s+)?(.+?)(?:\s+on\s+google)?$', _ui_lower)
+        if _search_match and self.action_registry and "google_search" in self.action_registry:
+            query = _search_match.group(1).strip()
+            # Don't match compound intents like "search and play"
+            if query and not _re.search(r'\band\s+(?:play|open|show|do|then)\b', query, _re.I):
+                # Don't match if target is youtube/spotify (those need agent mode)
+                if not _re.search(r'\bon\s+(?:youtube|spotify)\b', query, _re.I):
+                    logger.info(f"Direct dispatch: google_search fast-path ({query})")
+                    result = self.action_registry["google_search"](query)
+                    if result:
+                        return str(result)
+
+        # --- Time/date fast-path: "what day is it", "what's the date" ---
+        if _re.search(r'\b(?:what(?:\'?s|\s+is)?\s+(?:the\s+)?(?:day|date)\b|what\s+day\s+is\s+it)', _ui_lower):
+            logger.info("Direct dispatch: get_time (day/date fast-path)")
+            result = execute_tool("get_time", {}, self.action_registry)
             if result:
                 return str(result)
 

@@ -137,6 +137,9 @@ _CLI_COMMANDS = [
     # Process count
     (r"\bhow\s+many\s+(?:process(?:es)?|apps?|programs?)\s+(?:are\s+)?(?:running|active|open)",
      lambda m: "(Get-Process).Count.ToString() + ' processes are currently running.'"),
+    # List running processes / what's running
+    (r"(?:what|which|show|list)\s+(?:are\s+)?(?:the\s+)?(?:running\s+)?(?:process(?:es)?|apps?|programs?)(?:\s+(?:are\s+)?running)?",
+     lambda m: "Get-Process | Where-Object { $_.MainWindowTitle -ne '' } | Sort-Object CPU -Descending | Select-Object -First 15 Name,@{N='RAM';E={'{0:N0} MB' -f ($_.WorkingSet64/1MB)}} | ForEach-Object { \"$($_.Name): $($_.RAM)\" }"),
 
     # Process management
     (r"\bkill\s+(.+?)(?:\s+process)?$",
@@ -788,8 +791,8 @@ _DIRECT_TOOL_PATTERNS = [
     (r"(?:what(?:'s| is) the )?weather",
      lambda m: {"tool": "get_weather", "args": {}}),
 
-    # Time
-    (r"(?:what(?:'s| is)?\s+(?:the\s+)?(?:current\s+)?time|tell me the time)",
+    # Time / Date / Day
+    (r"(?:what(?:'s| is)?\s+(?:the\s+)?(?:current\s+)?(?:time|date|day)|tell me the (?:time|date)|what\s+(?:day|date)\s+is\s+it)",
      lambda m: {"tool": "get_time", "args": {}}),
 
     # News
@@ -807,9 +810,9 @@ _DIRECT_TOOL_PATTERNS = [
      lambda m: {"tool": "list_reminders", "args": {}}),
 
     # Music/volume control — direct media key dispatch
-    (r"(?:pause|stop)\s+(?:the\s+)?(?:music|song|track)?",
+    (r"^(?:pause|stop)(?:\s+(?:the\s+)?(?:music|song|track))?$",
      lambda m: {"tool": "play_music", "args": {"action": "pause"}}),
-    (r"(?:resume|continue|unpause)\s+(?:the\s+)?music|play\s+(?:the\s+)?music",
+    (r"^(?:resume|continue|unpause)(?:\s+(?:the\s+)?music)?$|^play\s+(?:the\s+)?music$",
      lambda m: {"tool": "play_music", "args": {"action": "play"}}),
     (r"(?:next|skip)\s+(?:the\s+)?(?:song|track|music)",
      lambda m: {"tool": "play_music", "args": {"action": "next"}}),
