@@ -984,12 +984,22 @@ def execute_parallel_tools(tasks, action_registry=None):
 # Context Gathering — observe current system state for smart routing
 # ===================================================================
 
+_context_cache = None
+_context_cache_time = 0
+_CONTEXT_CACHE_TTL = 2.0  # seconds
+
 def gather_context():
     """Gather current system context for intelligent strategy routing.
 
     Returns dict with active_window, browser state, running processes, etc.
     All calls are defensive (return empty/None on failure).
+    Cached for 2 seconds to avoid repeated expensive calls.
     """
+    global _context_cache, _context_cache_time
+    import time as _t
+    now = _t.time()
+    if _context_cache is not None and (now - _context_cache_time) < _CONTEXT_CACHE_TTL:
+        return _context_cache
     ctx = {
         "active_window": None,        # {"title": "...", "process": "..."}
         "browser_running": False,
@@ -1036,6 +1046,8 @@ def gather_context():
         ctx["recent_actions"] = list(BrainState.recent_actions)[-5:]
     except Exception:
         pass
+    _context_cache = ctx
+    _context_cache_time = now
     return ctx
 
 
