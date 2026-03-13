@@ -333,13 +333,21 @@ class UserPreferences:
 
     _APP_CATEGORIES = {
         "browser": ["chrome", "firefox", "edge", "brave", "opera", "vivaldi"],
+        "web browser": ["chrome", "firefox", "edge", "brave", "opera", "vivaldi"],
+        "default browser": ["chrome", "firefox", "edge", "brave", "opera", "vivaldi"],
+        "default web browser": ["chrome", "firefox", "edge", "brave", "opera", "vivaldi"],
+        "internet browser": ["chrome", "firefox", "edge", "brave", "opera", "vivaldi"],
         "editor": ["notepad", "notepad++", "vscode", "code", "sublime", "vim", "nano"],
         "text editor": ["notepad", "notepad++", "vscode", "code", "sublime"],
+        "code editor": ["vscode", "code", "sublime", "notepad++", "vim"],
         "terminal": ["windows terminal", "cmd", "powershell", "git bash"],
+        "command prompt": ["cmd", "windows terminal", "powershell"],
         "file manager": ["explorer", "files"],
         "music player": ["spotify", "vlc", "foobar", "winamp"],
         "video player": ["vlc", "mpv", "windows media player"],
         "email": ["outlook", "thunderbird", "gmail"],
+        "email client": ["outlook", "thunderbird", "gmail"],
+        "calculator": ["calculator", "calc"],
     }
 
     def resolve_app_category(self, name):
@@ -351,13 +359,17 @@ class UserPreferences:
         lower = name.lower().strip()
         # Check if it's a category keyword
         if lower not in self._APP_CATEGORIES:
-            # Also check "my browser", "a browser"
+            # Strip filler words: "my browser", "a browser", "the default web browser"
             import re
             m = re.match(r'^(?:my |a |the |an )?(.+)$', lower)
             if m:
                 lower = m.group(1).strip()
             if lower not in self._APP_CATEGORIES:
-                return name
+                # Try stripping "default " prefix too
+                if lower.startswith("default "):
+                    lower = lower[8:].strip()
+                if lower not in self._APP_CATEGORIES:
+                    return name
 
         # Check if user has a saved preference
         pref = self.store.recall("app_defaults", lower)

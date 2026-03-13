@@ -309,10 +309,10 @@ def _build_default_contracts() -> ContractRegistry:
         input_schema={
             "type": "object",
             "properties": {
-                "text": {"type": "string", "description": "Reminder text"},
+                "message": {"type": "string", "description": "Reminder text"},
                 "time": {"type": "string", "description": "When to remind (NLP parsed)"},
             },
-            "required": ["text", "time"],
+            "required": ["message", "time"],
         },
         side_effect_level=SIDE_EFFECT_LOCAL,
         timeout=5,

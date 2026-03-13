@@ -903,8 +903,22 @@ def _execute_tool_inner(tool_name, arguments, action_registry, reminder_mgr=None
 
         # --- Screen vision tools ---
         elif tool_name == "take_screenshot":
-            from vision import analyze_screen
-            return analyze_screen(arguments.get("question", "What is on the screen?"))
+            question = arguments.get("question", "")
+            if question:
+                # User asked to analyze screen — use llava
+                from vision import analyze_screen
+                return analyze_screen(question)
+            else:
+                # Just capture and save
+                from vision import capture_screenshot
+                img = capture_screenshot()
+                if img:
+                    import os, time as _t
+                    path = os.path.join(os.path.expanduser("~"), "Desktop",
+                                        f"screenshot_{int(_t.time())}.png")
+                    img.save(path)
+                    return f"Screenshot saved to {path}"
+                return "Error: could not capture screenshot"
 
         elif tool_name == "find_on_screen":
             element_name = arguments.get("element", "")
@@ -1355,7 +1369,7 @@ class Brain:
         # list_reminders and set_reminder are pure local ops — no LLM or strategy
         # overhead needed. Pattern-match here before handing off to selector.
         _ui_lower = user_input.lower().strip()
-        if _re.search(r'\b(?:list|show|check|what(?:\'s|\s+are)?\s+(?:my\s+)?)reminders?\b', _ui_lower):
+        if _re.search(r'\b(?:(?:list|show|check|get)\s+(?:my\s+|all\s+)?reminders?\b|what(?:\'s|\s+are)?\s+(?:my\s+)?reminders?\b)', _ui_lower):
             logger.info("Direct dispatch: list_reminders (fast-path)")
             result = execute_tool("list_reminders", {}, self.action_registry,
                                   reminder_mgr=getattr(self, 'reminder_mgr', None))
@@ -1398,14 +1412,14 @@ class Brain:
         # --- Google search fast-path: "search for X on google" / "google X" ---
         _search_match = _re.search(
             r'^(?:search|google)\s+(?:for\s+)?(.+?)(?:\s+on\s+google)?$', _ui_lower)
-        if _search_match and self.action_registry and "google_search" in self.action_registry:
+        if _search_match:
             query = _search_match.group(1).strip()
             # Don't match compound intents like "search and play"
             if query and not _re.search(r'\band\s+(?:play|open|show|do|then)\b', query, _re.I):
                 # Don't match if target is youtube/spotify (those need agent mode)
                 if not _re.search(r'\bon\s+(?:youtube|spotify)\b', query, _re.I):
                     logger.info(f"Direct dispatch: google_search fast-path ({query})")
-                    result = self.action_registry["google_search"](query)
+                    result = execute_tool("google_search", {"query": query}, self.action_registry)
                     if result:
                         return str(result)
 
@@ -1446,6 +1460,47 @@ class Brain:
             result = execute_tool("get_news", {}, self.action_registry)
             if result:
                 return str(result)
+
+        # --- Open app with category resolution: "open browser", "open the web browser" ---
+        _open_match = _re.match(
+            r'^(?:open|launch|start|run)\s+(?:the\s+)?(?:my\s+)?(.+?)(?:\s+app(?:lication)?)?$',
+            _ui_lower
+        )
+        if _open_match and "open_app" in (self.action_registry or {}):
+            app_name = _open_match.group(1).strip()
+            # Resolve category names: "browser" → "chrome", "editor" → "notepad"
+            try:
+                from memory import UserPreferences, MemoryStore
+                _prefs = UserPreferences(MemoryStore())
+                resolved = _prefs.resolve_app_category(app_name)
+                if resolved.lower() != app_name.lower():
+                    logger.info(f"Direct dispatch: open_app category '{app_name}' → '{resolved}'")
+                    result = self.action_registry["open_app"](resolved)
+                    if result:
+                        return str(result)
+            except Exception:
+                pass
+
+        # --- Math fast-path: "what is 2+2", "calculate 5*3", "2+2" ---
+        _math_match = _re.search(
+            r'(?:what\s+is\s+|calculate\s+|solve\s+|compute\s+)?'
+            r'(\d+(?:\.\d+)?)\s*([+\-*/^%])\s*(\d+(?:\.\d+)?)',
+            _ui_lower
+        )
+        if _math_match:
+            try:
+                a, op, b = _math_match.group(1), _math_match.group(2), _math_match.group(3)
+                a, b = float(a), float(b)
+                ops = {'+': a+b, '-': a-b, '*': a*b, '/': a/b if b else 0,
+                       '^': a**b, '%': a%b if b else 0}
+                answer = ops.get(op)
+                if answer is not None:
+                    # Format: remove trailing .0 for clean integers
+                    ans_str = f"{answer:g}"
+                    logger.info(f"Direct dispatch: math fast-path ({a:g} {op} {b:g} = {ans_str})")
+                    return f"{a:g} {op} {b:g} = {ans_str}"
+            except Exception:
+                pass
 
         # --- StrategySelector: tries CLI → API → WEBSITE → TOOL → UIA → CDP ---
         selector = get_selector()
