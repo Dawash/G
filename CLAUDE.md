@@ -18,7 +18,7 @@ Alternative: `pip install -r requirements.txt && python main.py` (manual dep ins
 
 Legacy: `python main3.py` (moved to `legacy/` folder).
 
-## Architecture — 21 Modules
+## Architecture — 21 Modules + Multi-Agent System
 
 ```
 run.py              → Auto-launcher (deps, Ollama setup, validation, launch)
@@ -46,6 +46,37 @@ user_choice.py      → Interactive multi-choice system: present options, parse 
 self_test.py        → Runtime diagnostics: 17 tests across core subsystems
 legacy/             → Archived files (main3.py, openclaw_bridge.py)
 ```
+
+### Multi-Agent "G Swarm" System (agents/)
+
+```
+agents/__init__.py       → Package init, exports SwarmOrchestrator
+agents/blackboard.py     → Shared state: dict + plan management + TF-IDF vector memory + checkpointing
+agents/base.py           → BaseAgent class (shared LLM fn, blackboard, messaging)
+agents/planner.py        → Tree-of-Thoughts planner (3 branches, score, pick best, decompose)
+agents/executor.py       → Wraps desktop_agent + strategy selector, 3-tier dispatch
+agents/critic.py         → Self-consistency scoring (optimistic + critical), stuck detection
+agents/researcher.py     → Web research when stuck, cached solution lookup
+agents/memory_agent.py   → Skill evolution + reflexion learning after task completion
+agents/orchestrator.py   → State machine: PLAN → EXECUTE → CRITIQUE → RESEARCH/REPLAN → DONE → LEARN
+tools/code_interpreter.py → Safe Python sandbox (30s timeout, restricted imports, no network)
+```
+
+**State Machine Flow:**
+```
+brain._run_agent_mode() detects complex tasks
+  → SwarmOrchestrator.execute(goal)
+    → PlannerAgent: Tree-of-Thoughts (3 approaches, LLM scores, decompose best)
+    → ExecutorAgent loop: direct dispatch → strategy selector → desktop agent
+    → CriticAgent every 3 steps: score 0-100 → continue/retry/research/replan/done/abort
+    → ResearcherAgent on failure: web search → synthesize fix → retry
+    → MemoryAgent on completion: save skills or store reflexions
+  → Falls back to legacy desktop_agent if swarm fails
+```
+
+**Budget Controls:** max 30 actions, 40 LLM calls, 300s timeout, 3 replans.
+
+**Blackboard Pattern:** Thread-safe shared dict + TF-IDF vector index for semantic retrieval of past reflexions. Supports checkpointing/rollback for plan state.
 
 ### Data Flow — Brain-First Architecture with State Machine
 
@@ -117,32 +148,40 @@ Key features:
 - Context awareness: ambient context injection (active window, clipboard on trigger words, time-of-day)
 - Recent actions buffer: "do that again" replays last tool call
 - Failure recovery: suggests similar apps when "not found"
+- Complex tasks auto-escalate to SwarmOrchestrator (multi-agent mode)
+- Code interpreter tool: `run_code` for math, data processing, logic in safe sandbox
 
-### Desktop Agent — Agentic Mode (desktop_agent.py)
+### Desktop Agent — Agentic Mode (desktop_agent.py + agents/)
 
-Proactive autonomous desktop automation with plan-first architecture:
+Two execution paths depending on task complexity:
 
+**Legacy Desktop Agent** (desktop_agent.py) — single-agent for simple UI tasks:
 ```
-execute(goal):
-    1. print("Thinking...") — silent planning, no speech
-    2. _plan(goal) → LLM generates step-by-step plan (max 10 steps)
-    3. For each planned step:
-        a. _observe(screen) → screenshot + llava vision + OS window info
-        b. _think(goal, screen, plan_step) → decide exact tool + args
-        c. _act(decision) → execute tool (or run_command for terminal)
-        d. _verify_step() → check via tool result + vision + web extraction
-        e. If failed → _diagnose() → multi-round LLM fix → retry
-    4. Auto-completion detection from tool results
+execute(goal): plan → observe → think → act → verify → diagnose → retry
+```
+
+**Multi-Agent Swarm** (agents/orchestrator.py) — for complex multi-step tasks:
+```
+brain._run_agent_mode() detects complex patterns (plan+book, research+write, order+pay)
+  → SwarmOrchestrator.execute(goal)
+    1. PlannerAgent: Tree-of-Thoughts (3 branches scored 0-100, best decomposed)
+    2. ExecutorAgent loop: direct dispatch → strategy selector → desktop agent
+    3. CriticAgent every 3 steps: self-consistency scoring → verdict
+    4. ResearcherAgent on failure: web search → synthesize actionable fix
+    5. MemoryAgent on completion: save skills or store reflexions
+  → Falls back to legacy desktop_agent if swarm fails
 ```
 
 - **Silent execution**: agent thinks in console only, speaks only final result
 - **Web verification**: extracts browser URL and page content to verify web actions
 - **Terminal commands**: `run_command` tool for system checks (tasklist, systeminfo)
 - **Diagnosis**: multi-round LLM consultation on failures with specific fix actions
-- **Stuck detection**: detects repeated failures and forces alternative approaches
+- **Stuck detection**: detects repeated failures and forces alternative approaches (oscillation A→B→A→B)
 - **Sub-agents**: can split independent subtasks for sequential execution
 - **Vision**: uses llava to understand screen state, detect blockers, find elements
-- **OpenClaw integration**: optional advanced browser/messaging tools
+- **Budget controls**: max 30 actions, 40 LLM calls, 300s timeout, 3 replans
+- **Reflexion learning**: failure lessons stored in TF-IDF vector memory for future avoidance
+- **Skill evolution**: successful multi-step sequences saved/refined in skill library
 
 ### Speech System (speech.py)
 
@@ -274,6 +313,8 @@ SQLite-backed persistent memory:
 | Multi-API chat (Ollama/OpenAI/Anthropic/OpenRouter) | ✅ Sliding context window |
 | LLM Brain (15 core tools) | ✅ 3-tier tool calling, mode-based routing |
 | Desktop agent (agentic mode) | ✅ Plan→observe→think→act→verify→diagnose |
+| Multi-agent swarm (complex tasks) | ✅ 5 agents: Planner/Executor/Critic/Researcher/Memory |
+| Code interpreter (sandbox) | ✅ Safe Python execution, 30s timeout, restricted imports |
 | Vision (llava) | ✅ Screenshot analysis, element finding |
 | Web agent | ✅ Page reading, deep research, DuckDuckGo + Wikipedia |
 | Smart app discovery | ✅ Registry + Start Menu + fuzzy match + similar suggestions |
