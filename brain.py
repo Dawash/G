@@ -88,6 +88,38 @@ logger = logging.getLogger(__name__)
 # Max tool-call rounds before forcing a text response
 MAX_TOOL_ROUNDS = 3
 
+# --- Pre-compiled patterns for hot paths in think() ---
+_LANG_CODES = {
+    "nepali": "hi", "nepal": "hi", "hindi": "hi", "india": "hi",
+    "spanish": "es", "spain": "es", "french": "fr", "france": "fr",
+    "german": "de", "germany": "de", "japanese": "ja", "japan": "ja",
+    "korean": "ko", "korea": "ko", "chinese": "zh", "china": "zh",
+    "portuguese": "pt", "italian": "it", "italy": "it",
+    "russian": "ru", "russia": "ru", "arabic": "ar",
+    "bengali": "bn", "tamil": "ta", "telugu": "te", "marathi": "mr",
+    "urdu": "ur", "thai": "th", "vietnamese": "vi", "dutch": "nl",
+    "turkish": "tr", "indonesian": "id", "malay": "ms", "swedish": "sv",
+}
+_LANG_PATTERN = re.compile(
+    r'\b(?:in|into)\s+(nepali?|hindi|spanish|french|german|japanese|korean|'
+    r'chinese|portuguese|italian|russian|arabic|bengali|tamil|telugu|'
+    r'marathi|urdu|thai|vietnamese|dutch|turkish|indonesian|malay|swedish|'
+    r'nepal|india|spain|france|germany|japan|korea|china|italy|russia)\b',
+    re.I
+)
+# Pre-compiled patterns for knowledge question detection (hot path in _try_direct_dispatch)
+_RE_KNOWLEDGE_START = re.compile(
+    r'^(?:what\'?s?|who\'?s?|where|when|why|how|explain|tell me|define|describe'
+    r'|translate|say|calculate|solve|give me|list|name|can you)\b', re.I
+)
+_RE_ACTION_WORDS = re.compile(
+    r'\b(open|close|launch|install|set|create|send|search for|files?|apps?'
+    r'|download|reminders?|weather|forecast|news|screenshots?|alarms?|emails?'
+    r'|desktop|windows?|click|type|tabs?|processes?|battery|wifi|network)\b', re.I
+)
+_RE_TIME_DATE = re.compile(r'\b(what|the) (time|date)\b', re.I)
+_RE_SYSTEM_QUERY = re.compile(r'\b(my |check |how much |what\'?s? my )(ram|cpu|disk|time)\b', re.I)
+
 # ===================================================================
 # Shared runtime state (Phase 2 migration — replaces module globals)
 # ===================================================================
@@ -1382,11 +1414,11 @@ class Brain:
         # Exclude only system-action words, not knowledge about those topics.
         # "what is RAM" = knowledge (quick_chat), "how much RAM" = system (tool)
         _no_tool_needed = (
-            _re.search(r'^(?:what\'?s?|who\'?s?|where|when|why|how|explain|tell me|define|describe|translate|say|calculate|solve|give me|list|name|can you)\b', user_input, _re.I)
-            and not _re.search(r'\b(open|close|launch|install|set|create|send|search for|files?|apps?|download|reminders?|weather|forecast|news|screenshots?|alarms?|emails?|desktop|windows?|click|type|tabs?|processes?|battery|wifi|network)\b', user_input, _re.I)
-            and not _re.search(r'\b(what|the) (time|date)\b', user_input, _re.I)
+            _RE_KNOWLEDGE_START.search(user_input)
+            and not _RE_ACTION_WORDS.search(user_input)
+            and not _RE_TIME_DATE.search(user_input)
             # Allow knowledge about tech topics (RAM, CPU, etc.) — only block system queries
-            and not _re.search(r'\b(my |check |how much |what\'?s? my )(ram|cpu|disk|time)\b', user_input, _re.I)
+            and not _RE_SYSTEM_QUERY.search(user_input)
         )
         if _no_tool_needed and len(user_input.split()) <= 20:
             logger.info(f"Direct dispatch: quick_chat (pure knowledge question)")
@@ -1770,24 +1802,7 @@ class Brain:
 
         # Detect one-shot language override: "say X in Hindi", "greet in Nepali"
         # User is speaking ENGLISH but wants OUTPUT in another language
-        _LANG_CODES = {
-            "nepali": "hi", "nepal": "hi", "hindi": "hi", "india": "hi",
-            "spanish": "es", "spain": "es", "french": "fr", "france": "fr",
-            "german": "de", "germany": "de", "japanese": "ja", "japan": "ja",
-            "korean": "ko", "korea": "ko", "chinese": "zh", "china": "zh",
-            "portuguese": "pt", "italian": "it", "italy": "it",
-            "russian": "ru", "russia": "ru", "arabic": "ar",
-            "bengali": "bn", "tamil": "ta", "telugu": "te", "marathi": "mr",
-            "urdu": "ur", "thai": "th", "vietnamese": "vi", "dutch": "nl",
-            "turkish": "tr", "indonesian": "id", "malay": "ms", "swedish": "sv",
-        }
-        _lang_match = re.search(
-            r'\b(?:in|into)\s+(nepali?|hindi|spanish|french|german|japanese|korean|'
-            r'chinese|portuguese|italian|russian|arabic|bengali|tamil|telugu|'
-            r'marathi|urdu|thai|vietnamese|dutch|turkish|indonesian|malay|swedish|'
-            r'nepal|india|spain|france|germany|japan|korea|china|italy|russia)\b',
-            user_input, re.I
-        )
+        _lang_match = _LANG_PATTERN.search(user_input)
         if _lang_match:
             target_lang = _lang_match.group(1).lower()
             lang_code = _LANG_CODES.get(target_lang)

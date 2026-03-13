@@ -2432,13 +2432,26 @@ class DesktopAgent:
         except Exception:
             return []
 
+    # --- Cached tasklist to avoid 5s subprocess per agent turn ---
+    _tasklist_cache = None
+    _tasklist_cache_time = 0
+    _TASKLIST_TTL = 5.0  # seconds
+
     def _get_running_apps(self):
-        """Get key running processes (apps the user cares about)."""
+        """Get key running processes (apps the user cares about).
+
+        Cached for 5 seconds — process list doesn't change between agent turns.
+        """
+        now = time.time()
+        if (DesktopAgent._tasklist_cache is not None
+                and (now - DesktopAgent._tasklist_cache_time) < self._TASKLIST_TTL):
+            return DesktopAgent._tasklist_cache
+
         try:
             import subprocess
             result = subprocess.run(
                 ["tasklist", "/FI", "STATUS eq Running", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, timeout=2  # was 5s, rarely > 100ms
             )
             # Extract unique app names from CSV, skip system processes
             _SKIP = {"svchost.exe", "csrss.exe", "wininit.exe", "services.exe",
@@ -2449,7 +2462,10 @@ class DesktopAgent:
                 parts = line.strip('"').split('","')
                 if parts and parts[0] not in _SKIP:
                     apps.add(parts[0])
-            return sorted(apps)[:20]  # Top 20 to avoid noise
+            cached = sorted(apps)[:20]  # Top 20 to avoid noise
+            DesktopAgent._tasklist_cache = cached
+            DesktopAgent._tasklist_cache_time = now
+            return cached
         except Exception:
             return []
 
@@ -2548,20 +2564,24 @@ class DesktopAgent:
                 ui_summary_parts.append(f"[{tag}] \"{el['name']}\"")
             os_summary += f"\nUI elements: {', '.join(ui_summary_parts)}"
 
-        # === LAYER 3: CDP/Web — browser content (always try, even if not focused) ===
+        # === LAYER 3: CDP/Web — browser content (conditional) ===
         browser_content = None
-        # Try browser content if ANY browser is running (not just focused)
         browser_names = ["chrome", "firefox", "msedge", "brave", "opera"]
-        browser_running = any(
-            app.lower().replace(".exe", "") in browser_names
-            for app in running_apps
-        )
         browser_focused = any(
             b in (window_title or "").lower()
             for b in ["firefox", "chrome", "edge", "brave", "opera"]
         )
+        # Only extract browser content if: browser is focused, OR goal mentions web
+        _goal_lower = (goal or "").lower()
+        _goal_needs_browser = any(
+            kw in _goal_lower for kw in [
+                "browser", "web", "site", "page", "url", "http", "search",
+                "youtube", "google", "reddit", "wikipedia", "navigate",
+                "go to", "click", "link", "login", "sign in", "download",
+            ]
+        )
 
-        if browser_running or browser_focused:
+        if browser_focused or _goal_needs_browser:
             try:
                 browser_content = self._extract_browser_content()
                 if browser_content:
@@ -2598,7 +2618,7 @@ class DesktopAgent:
         # === LAYER 5 (last resort): Vision — screenshot + llava ===
         need_vision = (
             use_vision
-            or self._stuck_count >= 2
+            or self._stuck_count >= 3  # was 2: delay vision until truly stuck
             or self._vision_needed(goal)
         )
 

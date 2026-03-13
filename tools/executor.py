@@ -13,6 +13,9 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
+# Shared pool — avoids creating a new ThreadPoolExecutor per tool call (~10-30ms savings)
+_shared_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tool")
+
 from tools.schemas import ToolSpec
 from tools.registry import ToolRegistry
 from tools.cache import ResponseCache
@@ -394,13 +397,12 @@ class ToolExecutor:
 
         # All other tools get a per-handler timeout to prevent deadlocks
         timeout = _get_scaled_timeout(spec.name)
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(spec.handler, **kwargs)
-            try:
-                return future.result(timeout=timeout)
-            except FuturesTimeout:
-                logger.warning(f"Tool {spec.name} timed out after {timeout}s")
-                return f"Tool {spec.name} timed out after {timeout}s"
+        future = _shared_pool.submit(spec.handler, **kwargs)
+        try:
+            return future.result(timeout=timeout)
+        except FuturesTimeout:
+            logger.warning(f"Tool {spec.name} timed out after {timeout}s")
+            return f"Tool {spec.name} timed out after {timeout}s"
 
     @staticmethod
     def _normalize_arguments(tool_name, arguments):
