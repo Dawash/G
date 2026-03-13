@@ -1484,8 +1484,43 @@ class Brain:
                     if result:
                         return str(result)
 
-        # --- Time/date fast-path: "what time is it", "what day is it" ---
-        if _re.search(r'\b(?:what(?:\'?s|\s+is)?\s+(?:the\s+)?(?:time|day|date)\b|what\s+(?:time|day)\s+is\s+it)', _ui_lower):
+        # --- Time/date fast-path: "what time is it", "what day is it", "what time is it in tokyo" ---
+        _time_match = _re.search(r'\b(?:what(?:\'?s|\s+is)?\s+(?:the\s+)?(?:time|day|date)\b|what\s+(?:time|day)\s+is\s+it)', _ui_lower)
+        if _time_match:
+            # Check for timezone/city: "what time is it in tokyo"
+            _tz_match = _re.search(r'\b(?:time\s+(?:is\s+it\s+)?in|time\s+in)\s+(.+?)[\?\.\!]*$', _ui_lower)
+            if _tz_match:
+                city = _tz_match.group(1).strip()
+                logger.info(f"Direct dispatch: get_time with timezone ({city})")
+                try:
+                    from datetime import datetime, timezone, timedelta
+                    # Common city→UTC offset map
+                    _TZ_OFFSETS = {
+                        'tokyo': 9, 'japan': 9, 'seoul': 9, 'korea': 9,
+                        'beijing': 8, 'china': 8, 'shanghai': 8, 'hong kong': 8, 'singapore': 8,
+                        'mumbai': 5.5, 'india': 5.5, 'delhi': 5.5, 'kolkata': 5.5,
+                        'dubai': 4, 'abu dhabi': 4, 'london': 0, 'uk': 0, 'england': 0,
+                        'paris': 1, 'france': 1, 'berlin': 1, 'germany': 1, 'rome': 1, 'italy': 1,
+                        'madrid': 1, 'spain': 1, 'amsterdam': 1, 'brussels': 1,
+                        'moscow': 3, 'russia': 3, 'istanbul': 3, 'turkey': 3,
+                        'new york': -5, 'nyc': -5, 'los angeles': -8, 'la': -8,
+                        'chicago': -6, 'denver': -7, 'toronto': -5, 'vancouver': -8,
+                        'sydney': 11, 'melbourne': 11, 'australia': 11, 'auckland': 13,
+                        'new zealand': 13, 'kathmandu': 5.75, 'nepal': 5.75,
+                        'cairo': 2, 'egypt': 2, 'johannesburg': 2, 'south africa': 2,
+                        'bangkok': 7, 'thailand': 7, 'jakarta': 7, 'indonesia': 7,
+                        'sao paulo': -3, 'brazil': -3, 'rio': -3, 'mexico city': -6,
+                    }
+                    city_lower = city.lower()
+                    offset = _TZ_OFFSETS.get(city_lower)
+                    if offset is not None:
+                        hours = int(offset)
+                        minutes = int((offset - hours) * 60)
+                        tz = timezone(timedelta(hours=hours, minutes=minutes))
+                        now = datetime.now(tz)
+                        return f"It's {now.strftime('%A, %I:%M %p')} in {city.title()}."
+                except Exception:
+                    pass
             logger.info("Direct dispatch: get_time fast-path")
             result = execute_tool("get_time", {}, self.action_registry)
             if result:
@@ -1542,19 +1577,51 @@ class Brain:
             except Exception:
                 pass
 
-        # --- Math fast-path: "what is 2+2", "25 * 4 + 10", "sqrt(144)" ---
-        _math_expr = _re.search(
-            r'(?:what\s+is\s+|calculate\s+|solve\s+|compute\s+|what\'s\s+)?'
-            r'([\d\.\s+\-*/^%()]+(?:\s*[\d\.\s+\-*/^%()]+)*)',
+        # --- Square root fast-path: "what is the square root of 144" ---
+        _sqrt_match = _re.search(
+            r'(?:what\s+is\s+(?:the\s+)?)?square\s+root\s+of\s+(\d+(?:\.\d+)?)',
             _ui_lower
+        )
+        if _sqrt_match:
+            import math
+            val = float(_sqrt_match.group(1))
+            answer = math.sqrt(val)
+            ans_str = f"{answer:g}"
+            logger.info(f"Direct dispatch: sqrt fast-path (sqrt({val:g}) = {ans_str})")
+            return f"The square root of {val:g} is {ans_str}."
+
+        # --- Math fast-path: "what is 2+2", "999 times 999", "2 to the power of 10" ---
+        # Pre-process word-form operators into symbols
+        _math_input = _ui_lower
+        _math_input = _re.sub(r'\b(?:what\s+is\s+(?:the\s+)?|calculate\s+|solve\s+|compute\s+|what\'s\s+)', '', _math_input).strip()
+        _math_input = _re.sub(r'\bto\s+the\s+power\s+of\b', '**', _math_input)
+        _math_input = _re.sub(r'\braised\s+to\b', '**', _math_input)
+        _math_input = _re.sub(r'\btimes\b', '*', _math_input)
+        _math_input = _re.sub(r'\bmultiplied\s+by\b', '*', _math_input)
+        _math_input = _re.sub(r'\bdivided\s+by\b', '/', _math_input)
+        _math_input = _re.sub(r'\bplus\b', '+', _math_input)
+        _math_input = _re.sub(r'\bminus\b', '-', _math_input)
+        _math_input = _re.sub(r'\bmod\b', '%', _math_input)
+        _math_input = _re.sub(r'\bsquare\s+root\s+of\s+', 'sqrt(', _math_input)
+        # Handle "sqrt(" by closing the paren at end
+        if 'sqrt(' in _math_input and ')' not in _math_input:
+            _math_input = _math_input + ')'
+        _math_expr = _re.search(
+            r'([\d\.\s+\-*/^%()]+(?:\s*[\d\.\s+\-*/^%()]+)*)',
+            _math_input
         )
         if _math_match := _math_expr:
             expr = _math_match.group(1).strip()
             # Only proceed if it looks like actual math (has digits and operators)
-            if _re.search(r'\d', expr) and _re.search(r'[+\-*/^%]', expr) and len(expr) >= 3:
+            if _re.search(r'\d', expr) and _re.search(r'[+\-*/^%*]', expr) and len(expr) >= 3:
                 try:
-                    # Sanitize: only allow digits, operators, parens, spaces, dots
+                    # Sanitize: only allow digits, operators, parens, spaces, dots, sqrt
                     safe_expr = expr.replace('^', '**')
+                    # Strip "sqrt" text but keep parens for math.sqrt
+                    _has_sqrt = 'sqrt(' in safe_expr
+                    if _has_sqrt:
+                        safe_expr = safe_expr.replace('sqrt(', '(')  # Will use ** 0.5
+                        safe_expr = safe_expr.rstrip(')') + ') ** 0.5'
                     if _re.match(r'^[\d\s+\-*/.()]+$', safe_expr):
                         answer = eval(safe_expr)  # Safe: only math chars allowed
                         ans_str = f"{answer:g}" if isinstance(answer, float) else str(answer)
