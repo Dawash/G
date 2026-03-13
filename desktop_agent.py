@@ -83,9 +83,59 @@ _TAKEOVER_PATTERNS = [
      "A permission dialog appeared. Please handle it and say continue."),
 ]
 
-# Pre-action safety guardrails (minimal — user has full access)
-_BLOCKED_COMMANDS = set()  # No blocked commands — full system access
-_SENSITIVE_DOMAINS = set()  # No domain restrictions
+# Pre-action safety guardrails — default-deny for destructive system commands
+_BLOCKED_COMMANDS = frozenset({
+    # Disk destruction
+    "format c:", "format d:", "format e:", "diskpart",
+    "clean all", "delete partition",
+    # Boot / firmware
+    "bcdedit /delete", "bcdedit /set", "bcdboot",
+    # Registry nukes
+    "reg delete hklm", "reg delete hkcu",
+    "regedit /s",
+    # Credential / security
+    "net user administrator", "net localgroup administrators",
+    "cmdkey /delete", "cipher /w",
+    # Network exposure
+    "netsh advfirewall set allprofiles state off",
+    "netsh firewall set opmode disable",
+    "netsh interface set interface * disable",
+    # Recursive deletion
+    "remove-item -recurse -force c:\\",
+    "remove-item -recurse -force /",
+    "rd /s /q c:\\", "del /f /s /q c:\\",
+    "rm -rf /", "rm -rf /*",
+    # Process / service kill-all
+    "taskkill /f /im svchost", "taskkill /f /im csrss",
+    "taskkill /f /im winlogon", "taskkill /f /im lsass",
+    "stop-service -force *",
+    # Crypto / ransom patterns
+    "cipher /e /s:", "icacls * /deny everyone",
+    # PowerShell download-and-execute
+    "invoke-webrequest.*| invoke-expression",
+    "iex(new-object", "downloadstring(",
+    # Shadow copies
+    "vssadmin delete shadows",
+    "wmic shadowcopy delete",
+})
+
+# Domains that trigger extra caution (logged, not blocked)
+_SENSITIVE_DOMAINS = frozenset({
+    # Financial
+    "paypal.com", "venmo.com", "stripe.com", "square.com",
+    "chase.com", "bankofamerica.com", "wellsfargo.com",
+    "coinbase.com", "binance.com", "robinhood.com",
+    # Authentication / identity
+    "login.microsoftonline.com", "accounts.google.com",
+    "appleid.apple.com", "id.apple.com",
+    "auth0.com", "okta.com",
+    # Government / sensitive
+    "irs.gov", "ssa.gov", "healthcare.gov",
+    # Corporate admin
+    "console.aws.amazon.com", "portal.azure.com",
+    "console.cloud.google.com",
+    "admin.google.com",
+})
 
 # Recovery hints for common failures (base set + dynamically learned)
 _RECOVERY_HINTS = {

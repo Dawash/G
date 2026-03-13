@@ -83,6 +83,11 @@ from tools.memory_workflow_tools import register_memory_workflow_tools as _regis
 from tools.browser_tools import register_browser_tools as _register_browser_tools
 from tools.interactive_tools import register_interactive_tools as _register_interactive_tools
 
+# Phase 8: Execution tiers, contracts, failure journal
+from core.execution_tiers import classify_tier as _classify_tier, check_tier_policy as _check_tier_policy
+from core.tool_contracts import validate_call as _validate_contract
+from core.failure_journal import get_default_journal as _get_failure_journal, classify_error as _classify_failure
+
 logger = logging.getLogger(__name__)
 
 # Max tool-call rounds before forcing a text response
@@ -461,6 +466,19 @@ def execute_tool(tool_name, arguments, action_registry, reminder_mgr=None, speak
 
     logger.info(f"execute_tool called: {tool_name}({arguments})")
     execute_tool._action_registry = action_registry  # For agent escalation
+
+    # --- Phase 8: Contract validation (catches hallucinated args) ---
+    contract_ok, contract_errs = _validate_contract(tool_name, arguments)
+    if not contract_ok:
+        logger.warning(f"Contract violation for {tool_name}: {contract_errs}")
+        # Don't hard-fail — LLM may have close-enough args. Log only.
+
+    # --- Phase 8: Tier check (blocks HUMAN_REQUIRED actions) ---
+    tier = _classify_tier(tool_name, arguments, {"user_goal": user_input})
+    allowed, tier_reason = _check_tier_policy(tier, tool_name, arguments)
+    if not allowed:
+        logger.warning(f"Tier blocked: {tool_name} — {tier_reason}")
+        return f"I need your help with this step: {tier_reason}"
 
     # Cognitive Phase 4: confidence-based tool switching
     cog = getattr(_log_learning, '_cognition', None)
@@ -1015,6 +1033,17 @@ def _execute_tool_inner(tool_name, arguments, action_registry, reminder_mgr=None
 
     except Exception as e:
         logger.error(f"Tool execution error ({tool_name}): {e}")
+        # Record failure in journal for pattern learning
+        try:
+            _get_failure_journal().record_failure(
+                goal=getattr(execute_tool, '_last_user_input', ''),
+                route="tool_inner",
+                tool_sequence=[{"tool": tool_name, "args": arguments}],
+                error_class=_classify_failure(str(e), tool_name),
+                error_text=str(e),
+            )
+        except Exception:
+            pass
         return f"Error executing {tool_name}: {e}"
 
 
@@ -1380,10 +1409,41 @@ class Brain:
                     if result:
                         return str(result)
 
-        # --- Time/date fast-path: "what day is it", "what's the date" ---
-        if _re.search(r'\b(?:what(?:\'?s|\s+is)?\s+(?:the\s+)?(?:day|date)\b|what\s+day\s+is\s+it)', _ui_lower):
-            logger.info("Direct dispatch: get_time (day/date fast-path)")
+        # --- Time/date fast-path: "what time is it", "what day is it" ---
+        if _re.search(r'\b(?:what(?:\'?s|\s+is)?\s+(?:the\s+)?(?:time|day|date)\b|what\s+(?:time|day)\s+is\s+it)', _ui_lower):
+            logger.info("Direct dispatch: get_time fast-path")
             result = execute_tool("get_time", {}, self.action_registry)
+            if result:
+                return str(result)
+
+        # --- Weather fast-path: "what is the weather", "weather in tokyo" ---
+        _weather_match = _re.search(
+            r'(?:weather|temperature)\s+(?:in|for|at)\s+(.+)', _ui_lower)
+        if _weather_match:
+            city = _weather_match.group(1).strip().rstrip('?.')
+            logger.info(f"Direct dispatch: get_weather fast-path (city={city})")
+            result = execute_tool("get_weather", {"city": city}, self.action_registry)
+            if result:
+                return str(result)
+        elif _re.search(r'\b(?:what(?:\'?s|\s+is)?\s+(?:the\s+)?)?weather\b(?!\s+forecast)', _ui_lower):
+            logger.info("Direct dispatch: get_weather fast-path (local)")
+            result = execute_tool("get_weather", {}, self.action_registry)
+            if result:
+                return str(result)
+
+        # --- Forecast fast-path: "weather forecast", "will it rain" ---
+        if _re.search(r'\bforecast\b|will\s+it\s+rain|rain\s+today|rain\s+tomorrow', _ui_lower):
+            _fc_match = _re.search(r'forecast\s+(?:for|in)\s+(.+)', _ui_lower)
+            city = _fc_match.group(1).strip().rstrip('?.') if _fc_match else ""
+            logger.info(f"Direct dispatch: get_forecast fast-path (city={city})")
+            result = execute_tool("get_forecast", {"city": city} if city else {}, self.action_registry)
+            if result:
+                return str(result)
+
+        # --- News fast-path: "get the news", "latest news" ---
+        if _re.search(r'\b(?:latest|get|show|tell me)?\s*(?:the\s+)?news\b', _ui_lower):
+            logger.info("Direct dispatch: get_news fast-path")
+            result = execute_tool("get_news", {}, self.action_registry)
             if result:
                 return str(result)
 

@@ -28,6 +28,7 @@ tool_memory.json
 custom_tools.json
 improvement_log.json
 brain_trace.json
+agent_state.json
 reminders.json
 alarms.json
 test_results.json

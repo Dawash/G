@@ -43,7 +43,7 @@ reminders.py        → NLP time parsing, recurring, background checker
 alarms.py           → Morning alarm system: sound playback, voice dismiss, LLM motivation, weather+news briefing
 news.py             → Google News RSS, multi-category, BBC fallback
 user_choice.py      → Interactive multi-choice system: present options, parse voice/keyboard input
-self_test.py        → Runtime diagnostics: 17 tests across core subsystems
+self_test.py        → Runtime diagnostics: 24 tests across core subsystems
 legacy/             → Archived files (main3.py, openclaw_bridge.py)
 ```
 
@@ -77,6 +77,25 @@ brain._run_agent_mode() detects complex tasks
 **Budget Controls:** max 30 actions, 40 LLM calls, 300s timeout, 3 replans.
 
 **Blackboard Pattern:** Thread-safe shared dict + TF-IDF vector index for semantic retrieval of past reflexions. Supports checkpointing/rollback for plan state.
+
+### Core Safety & Contracts (core/)
+
+```
+core/execution_tiers.py   → 4-tier autonomy: DETERMINISTIC(0) → STRUCTURED(1) → ADAPTIVE(2) → HUMAN_REQUIRED(3)
+core/tool_contracts.py     → Typed ABI for tools: input schema, side-effect level, timeout, retry policy, rollback
+core/failure_journal.py    → SQLite failure corpus: auto-classified errors, pattern queries, analytics
+core/state.py              → Shared provider state (rate limits, Ollama health)
+core/session_persistence.py → Atomic session save/restore across restarts
+core/control_flags.py      → Runtime control flags (shutdown, pause, debug)
+```
+
+**Execution Tiers:** Every tool is mapped to an autonomy level. Tier 0 (get_time, weather) auto-executes. Tier 1 (open_app, browser) auto-executes with logging. Tier 2 (click_at, vision) auto-executes with screenshots. Tier 3 (payments, logins, 2FA) pauses and asks the user. Context-based escalation: payment/login keywords in goal → force Tier 3.
+
+**Tool Contracts:** JSON Schema validation on tool arguments before execution. Catches hallucinated args from LLM. Declares side-effect level (none/local/system/network/destructive), timeout, retry policy, and rollback handler.
+
+**Failure Journal:** Records every tool failure with auto-classified error type (timeout, not_found, permission, ui_stuck, hallucinated_args, etc.). Supports similar-failure queries via SequenceMatcher for pattern-based recovery.
+
+**Safety Model (desktop_agent.py):** 32 blocked command patterns (disk destruction, credential theft, firewall disable, recursive deletion, download-and-execute). 20 sensitive domains logged with extra caution (banking, cloud consoles, government).
 
 ### Data Flow — Brain-First Architecture with State Machine
 
@@ -346,7 +365,11 @@ SQLite-backed persistent memory:
 | Email sending | ✅ SMTP with credential storage |
 | Dynamic tool creation | ✅ Brain creates new tools at runtime |
 | Crash recovery | ✅ Main loop catches exceptions, keeps running |
-| Self-test diagnostics | ✅ 16 tests across core subsystems |
+| Self-test diagnostics | ✅ 24 tests across core subsystems |
+| Execution tiers | ✅ 4-tier autonomy levels with context-based escalation |
+| Tool contracts | ✅ JSON Schema validation, typed ABI for all tools |
+| Failure journal | ✅ SQLite failure corpus with pattern clustering |
+| Safety model | ✅ 32 blocked commands, 20 sensitive domains |
 | Dashboard | ✅ PyQt6 + QWebEngine, mic state indicator, action log |
 | Encrypted credentials | ✅ Fernet encryption (machine-key derived), auto-migration |
 | Dynamic voice tone | ❌ Not implemented |
