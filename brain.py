@@ -1598,7 +1598,7 @@ class Brain:
         if _fact_match:
             import math
             n = int(next(g for g in _fact_match.groups() if g is not None))
-            if 0 <= n <= 20:
+            if 0 <= n <= 170:
                 answer = math.factorial(n)
                 logger.info(f"Direct dispatch: factorial fast-path ({n}! = {answer})")
                 return f"{n}! = {answer}"
@@ -1755,6 +1755,9 @@ class Brain:
                 # Distance: inch <-> cm
                 ('inch', 'cm'): lambda v: v * 2.54,
                 ('cm', 'inch'): lambda v: v / 2.54,
+                # Distance: inch <-> ft
+                ('inch', 'ft'): lambda v: v / 12,
+                ('ft', 'inch'): lambda v: v * 12,
                 # Weight: kg <-> pound
                 ('kg', 'pound'): lambda v: v * 2.20462,
                 ('pound', 'kg'): lambda v: v * 0.453592,
