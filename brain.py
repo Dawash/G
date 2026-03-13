@@ -1320,6 +1320,13 @@ class Brain:
                 if result:
                     return str(result)
 
+        # --- Screenshot fast-path: bypass strategy selector ---
+        if _re.search(r'\b(take|capture|grab|save)\s+(a\s+)?screenshot\b', _ui_lower):
+            logger.info("Direct dispatch: take_screenshot (fast-path)")
+            result = execute_tool("take_screenshot", {}, self.action_registry)
+            if result:
+                return str(result)
+
         # --- StrategySelector: tries CLI → API → WEBSITE → TOOL → UIA → CDP ---
         selector = get_selector()
         execute_tool._last_user_input = user_input

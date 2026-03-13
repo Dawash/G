@@ -127,6 +127,8 @@ _CLI_COMMANDS = [
      lambda m: "netsh interface set interface Wi-Fi enable; 'WiFi enabled'"),
     (r"\bwifi\s*(?:list|scan|available|networks?)",
      lambda m: "netsh wlan show networks mode=bssid"),
+    (r"(?:show|list|what(?:'s)?|check)\s+(?:me\s+)?(?:my\s+)?(?:network|internet)\s*(?:connections?|interfaces?|adapters?|status)",
+     lambda m: "Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { $ip = (Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).IPAddress; \"$($_.Name): $($_.LinkSpeed) - IP: $ip\" }"),
     (r"\bping\s+(\S+)",
      lambda m: f"ping -n 4 {m.group(1).strip()}"),
     (r"\bflush\s*dns|clear\s*dns",

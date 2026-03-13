@@ -51,6 +51,28 @@ def close_window(title):
     Falls back to taskkill for UWP apps (Calculator, etc.) that don't respond to w.close().
     """
     try:
+        # File Explorer special case: taskkill explorer.exe kills the shell,
+        # so we close Explorer windows via COM (Shell.Application)
+        if title.lower() in ("explorer", "file explorer"):
+            try:
+                import subprocess
+                # Use PowerShell to close all Explorer windows via COM
+                ps_cmd = (
+                    "(New-Object -ComObject Shell.Application).Windows() | "
+                    "ForEach-Object { $_.Quit() }"
+                )
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_cmd],
+                    capture_output=True, timeout=5
+                )
+                import time
+                time.sleep(0.5)
+                remaining = gw.getWindowsWithTitle("Explorer")
+                if not remaining:
+                    return f"Done, I've closed File Explorer."
+            except Exception:
+                pass
+
         windows = gw.getWindowsWithTitle(title)
         if windows:
             for w in windows:
