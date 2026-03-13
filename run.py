@@ -53,15 +53,23 @@ REQUIRED_PACKAGES = {
     "speech_recognition": "SpeechRecognition",
     "requests": "requests",
     "pygetwindow": "pygetwindow",
+    "pyautogui": "pyautogui",         # Desktop automation (keyboard/mouse)
+    "PIL": "Pillow",                  # Screenshot processing for vision
+    "numpy": "numpy",                 # Audio/numeric processing
+    "rapidfuzz": "rapidfuzz",         # Fuzzy app matching
+    "cryptography": "cryptography>=41.0.0",  # Credential encryption
+    "psutil": "psutil>=5.9.0",        # System monitoring
+    "pyperclip": "pyperclip",         # Clipboard access
 }
 
 OPTIONAL_PACKAGES = {
-    "rapidfuzz": "rapidfuzz",         # Fuzzy app matching
-    "pyaudio": "PyAudio",             # Microphone input
+    "pyaudio": "PyAudio",             # Microphone input (can fail on some systems)
     "win32com.client": "pywin32",     # Start Menu shortcut resolution
-    "pyautogui": "pyautogui",         # Desktop automation (keyboard/mouse)
-    "PIL": "Pillow",                  # Screenshot processing for vision
     "comtypes": "comtypes",           # UIA accessibility tree (pywinauto dep)
+    "pywinauto": "pywinauto",         # Windows UI Automation
+    "gtts": "gTTS",                   # Google TTS (online, multilingual)
+    "pygame": "pygame",               # Audio playback for TTS
+    "websockets": "websockets>=12.0", # WebSocket gateway
 }
 
 CORE_MODULES = [
@@ -142,27 +150,46 @@ def install_package(pip_name):
 
 
 def check_dependencies():
-    """Check and install missing dependencies."""
+    """Check and install missing dependencies.
+
+    Strategy: first try full requirements.txt (fast, all-or-nothing),
+    then verify individual required packages, then optionals.
+    """
     print("\n[DEPS] Checking dependencies...")
 
+    # --- Step 1: Full requirements.txt install (catches everything) ---
+    req_file = os.path.join(PROJECT_DIR, "requirements.txt")
+    if os.path.isfile(req_file):
+        print("  Installing from requirements.txt...")
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-r", req_file, "--quiet"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            print("  [OK] All packages from requirements.txt installed")
+        else:
+            print("  [WARN] Some packages from requirements.txt failed — checking individually...")
+
+    # --- Step 2: Verify required packages individually (safety net) ---
     missing = []
     for import_name, pip_name in REQUIRED_PACKAGES.items():
         try:
             importlib.import_module(import_name)
-            print(f"  [OK] {pip_name}")
         except ImportError:
             missing.append((import_name, pip_name))
 
     if missing:
-        print(f"\n  {len(missing)} required package(s) missing. Installing...")
+        print(f"\n  {len(missing)} required package(s) still missing. Installing...")
         for import_name, pip_name in missing:
             if install_package(pip_name):
                 print(f"  [OK] {pip_name} installed")
             else:
                 print(f"  [FAIL] Could not install {pip_name}")
                 print(f"         Try: pip install {pip_name}")
+    else:
+        print("  [OK] All required packages verified")
 
-    # Optional packages — install silently, don't block
+    # --- Step 3: Optional packages — install silently, don't block ---
     for import_name, pip_name in OPTIONAL_PACKAGES.items():
         try:
             importlib.import_module(import_name)
@@ -306,7 +333,7 @@ def setup_ollama():
         print("    3. Run this script again")
         print()
 
-        choice = input("  Do you want me to download Ollama now? (y/n): ").strip().lower()
+        choice = input("  Do you want me to download and install Ollama now? (y/n): ").strip().lower()
         if choice in ("y", "yes"):
             print("  Downloading Ollama installer...")
             installer_path = os.path.join(
@@ -315,7 +342,9 @@ def setup_ollama():
             try:
                 urllib.request.urlretrieve(OLLAMA_URL, installer_path)
                 print(f"  Downloaded to: {installer_path}")
-                print(f"  Please run {installer_path} to install, then run this script again.")
+                print("  Launching installer...")
+                subprocess.Popen([installer_path], shell=True)
+                print("  Installer launched — complete it, then re-run: python run.py")
                 sys.exit(0)
             except Exception as e:
                 print(f"  Download failed: {e}")
@@ -357,7 +386,7 @@ def setup_ollama():
 
 
 def _check_vision_model():
-    """Check if the llava vision model is available (info only, no auto-pull)."""
+    """Check if the llava vision model is available, offer to auto-pull."""
     if not _ollama_is_running():
         return
     if _ollama_has_model("llava"):
@@ -365,7 +394,18 @@ def _check_vision_model():
     else:
         print("  [INFO] Vision model 'llava' not installed.")
         print("         Screen vision features (take_screenshot, agent_task) require it.")
-        print("         To enable: ollama pull llava")
+        try:
+            choice = input("  Pull llava now? (~4GB, needed for vision) (y/n): ").strip().lower()
+            if choice in ("y", "yes"):
+                _pull_model("llava")
+                if _ollama_has_model("llava"):
+                    print("  [OK] Vision model 'llava' ready")
+                else:
+                    print("  [WARN] llava pull failed. To retry: ollama pull llava")
+            else:
+                print("         To install later: ollama pull llava")
+        except (EOFError, KeyboardInterrupt):
+            print("\n         Skipped. To install later: ollama pull llava")
 
 
 def _validate_cloud_api_key(provider, api_key, config, config_file):
@@ -765,8 +805,36 @@ def _download_speech_models():
 
 
 def main():
+    # --- Quick flags ---
+    if "--update" in sys.argv:
+        print("[UPDATE] Pulling latest code and models...")
+        subprocess.run(["git", "pull", "--ff-only"], cwd=PROJECT_DIR)
+        subprocess.run([sys.executable, "-m", "pip", "install", "-r",
+                        os.path.join(PROJECT_DIR, "requirements.txt"), "--quiet"])
+        # Pull latest Ollama model if configured
+        config_file = os.path.join(PROJECT_DIR, "config.json")
+        if os.path.exists(config_file):
+            with open(config_file, "r") as f:
+                cfg = json.load(f)
+            model = cfg.get("ollama_model", OLLAMA_DEFAULT_MODEL)
+            if _ollama_is_running():
+                subprocess.run(["ollama", "pull", model])
+        print("[OK] Update complete. Run 'python run.py' to start.")
+        sys.exit(0)
+
     # Auto-relaunch with Python 3.12 if available (needed for PyAudio, faster-whisper)
     _relaunch_with_preferred_python()
+
+    # --- Root logging ---
+    import logging
+    log_dir = os.path.join(PROJECT_DIR, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    logging.basicConfig(
+        filename=os.path.join(log_dir, "assistant.log"),
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        encoding="utf-8",
+    )
 
     print_banner()
 
@@ -804,6 +872,28 @@ def main():
 
     elapsed = time.time() - start_time
     print(f"  Startup checks completed in {elapsed:.1f}s\n")
+
+    # --- Optional self-test (first run or --selftest flag) ---
+    run_test = "--selftest" in sys.argv
+    if is_first_run and not run_test:
+        try:
+            run_test = input("  Run self-test to verify everything works? (y/n): ").strip().lower() in ("y", "yes")
+        except (EOFError, KeyboardInterrupt):
+            pass
+    if run_test:
+        print("\n[TEST] Running self-test diagnostics...")
+        try:
+            from self_test import run_self_test
+            report = run_self_test()
+            print(report)
+            # Save report to logs
+            log_dir = os.path.join(PROJECT_DIR, "logs")
+            os.makedirs(log_dir, exist_ok=True)
+            with open(os.path.join(log_dir, "selftest.log"), "w", encoding="utf-8") as f:
+                f.write(report)
+            print(f"  Report saved to logs/selftest.log\n")
+        except Exception as e:
+            print(f"  [WARN] Self-test failed: {e}\n")
 
     print("  [8/8] Launching assistant...")
     launch()

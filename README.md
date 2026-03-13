@@ -359,6 +359,80 @@ G/
 - GPU recommended (CUDA) for Whisper acceleration
 - Internet for weather, news, web features (core works offline)
 
+## Troubleshooting
+
+### Common Issues
+
+**"ModuleNotFoundError: No module named 'faster_whisper'"**
+```bash
+pip install faster-whisper
+# Or reinstall everything:
+pip install -r requirements.txt
+```
+
+**"Ollama not running" / Connection refused**
+```bash
+# Start the Ollama server
+ollama serve
+# In another terminal, verify:
+curl http://localhost:11434
+```
+
+**PyAudio fails to install**
+```bash
+# Windows — use pre-built binary
+pip install pyaudio --only-binary=:all:
+# Or install Visual C++ Build Tools first
+```
+
+**"CUDA not available" (slow STT)**
+- Install NVIDIA CUDA Toolkit 11.8+
+- Whisper falls back to CPU (slower but works)
+
+**Microphone not working**
+- Check Windows Settings > Privacy > Microphone access
+- Run `python -c "import pyaudio; print(pyaudio.PyAudio().get_default_input_device_info())"` to verify
+- Try: `python run.py --selftest`
+
+**Ollama model download stalls**
+```bash
+# Cancel and retry
+ollama pull qwen2.5:7b
+# If behind proxy, set HTTP_PROXY/HTTPS_PROXY
+```
+
+**"piper-tts" install fails**
+- Piper requires specific Python version compatibility
+- Fallback TTS (pyttsx3) works without it — G auto-detects
+
+**Agent mode times out**
+- Large models (32B+) need more time — increase `ollama_timeout` in config.json
+- Try a smaller model: `ollama pull qwen2.5:7b`
+
+**Vision features not working**
+```bash
+ollama pull llava
+# Verify: ollama list (should show llava)
+```
+
+### Run Diagnostics
+
+```bash
+# Full self-test (checks all 17 subsystems)
+python run.py --selftest
+
+# Or from Python:
+from self_test import run_self_test
+print(run_self_test())
+```
+
+### Update G
+
+```bash
+python run.py --update
+# Pulls latest code, updates deps, refreshes Ollama model
+```
+
 ## License
 
 MIT License - see [LICENSE](LICENSE)
