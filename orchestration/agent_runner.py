@@ -14,7 +14,8 @@ _STOP_WORDS = frozenset({
 })
 
 
-def run_agent_mode(user_input, action_registry, reminder_mgr, speak_fn, messages=None):
+def run_agent_mode(user_input, action_registry, reminder_mgr, speak_fn,
+                   messages=None, skip_strategies=None):
     """Run autonomous agent for multi-step screen tasks.
 
     Runs agent in background thread while monitoring mic for interruption.
@@ -27,6 +28,7 @@ def run_agent_mode(user_input, action_registry, reminder_mgr, speak_fn, messages
         reminder_mgr: ReminderManager instance.
         speak_fn: TTS function.
         messages: Optional message list to append result to.
+        skip_strategies: Set of strategy names already tried by caller (avoid retrying).
 
     Returns:
         str result message.
@@ -38,6 +40,9 @@ def run_agent_mode(user_input, action_registry, reminder_mgr, speak_fn, messages
         reminder_mgr=reminder_mgr,
         speak_fn=speak_fn,
     )
+    # Pass already-tried strategies so agent doesn't retry them
+    if skip_strategies:
+        agent._skip_strategies = set(skip_strategies)
 
     result_holder = [None]
     error_holder = [None]

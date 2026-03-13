@@ -1409,7 +1409,7 @@ class StrategySelector:
         return [first] + rest
 
     def execute_step(self, step_description, context=None, action_registry=None,
-                     skip_vision=True):
+                     skip_vision=True, skip_strategies=None):
         """Execute step using the best available strategy.
 
         Smart features:
@@ -1418,9 +1418,11 @@ class StrategySelector:
         - Handles compound intents ("open chrome and go to reddit")
         - Verifies results via postconditions
         - Records outcomes for adaptive learning
+        - skip_strategies: set of strategy names to skip (already tried by caller)
 
         Returns: (result_string, strategy_name) or (None, None)
         """
+        self._last_tried_strategies = []
         # Auto-gather context if not provided
         if context is None:
             try:
@@ -1475,8 +1477,13 @@ class StrategySelector:
         strategies = self.select_strategies(step_description, context)
 
         for strategy, data in strategies:
+            self._last_tried_strategies.append(strategy)
             if strategy == STRATEGY_VISION and skip_vision:
                 return (None, None)
+            # Skip strategies already tried by caller (avoid double execution)
+            if skip_strategies and strategy in skip_strategies:
+                logger.debug(f"Skipping strategy '{strategy}' (already tried by caller)")
+                continue
 
             # Settings URI fast-path
             if strategy == "settings":

@@ -449,6 +449,11 @@ class DesktopAgent:
         self._backtrack_count = 0  # Number of backtracks used
         self._actions_since_checkpoint = 0  # Actions since last checkpoint
         self._success_criteria = ""  # Extracted from plan output
+        self._obs_cache = None         # Cached observation result
+        self._obs_cache_time = 0       # When observation was cached
+        self._obs_cache_ttl = 2.5      # Cache TTL in seconds
+        self._obs_dirty = True         # True = must re-observe (action changed state)
+        self._skip_strategies = set()  # Strategies already tried by caller (avoid retry)
 
         # Load learned recovery hints from previous sessions
         DesktopAgent.load_learned_hints()
@@ -957,6 +962,8 @@ class DesktopAgent:
                 result = self._run_terminal_command(cmd)
             else:
                 result = self._act(decision)
+            # Mark observation cache dirty — screen state likely changed
+            self._obs_dirty = True
             logger.info(f"Action result: {str(result)[:200]}")
 
             # Parse result into structured outcome
@@ -1818,6 +1825,11 @@ class DesktopAgent:
                                              "created file", "playing", "toggled"]):
             verified = True
             details += " | result keywords confirm success"
+            # Early exit: if tool result confirms AND no error keywords, skip slow layers
+            error_indicators = ["error", "failed", "not found", "denied", "crash",
+                                "stopped working", "not responding", "blocked"]
+            if not any(ind in result_lower for ind in error_indicators):
+                return {"verified": True, "details": details, "web_content": ""}
 
         # --- Layer 2: Window title check (fast, reliable for app tasks) ---
         if not verified or "open" in step_lower or "launch" in step_lower:
@@ -1862,8 +1874,9 @@ class DesktopAgent:
                 if verified:
                     break
 
-        # --- Layer 5: Web extraction (for browser steps) ---
-        if not verified and ("browser" in step_lower or "web" in step_lower or "search" in step_lower):
+        # --- Layer 5: Web extraction (for browser steps only, skip for app search) ---
+        if not verified and ("browser" in step_lower or "web" in step_lower
+                             or ("navigate" in step_lower and "http" in step_lower)):
             url = self._get_browser_url()
             if url:
                 try:
@@ -2388,7 +2401,19 @@ class DesktopAgent:
           - ``use_vision=True`` is passed explicitly
           - The agent is stuck (self._stuck_count >= 2)
           - The goal requires visual inspection (self._vision_needed(goal))
+
+        Caching: If the last action succeeded and cache is fresh (< TTL),
+        skip full re-observation and return cached state (saves 1-3s per turn).
         """
+        # --- Cache check: reuse recent observation if state hasn't changed ---
+        if (not self._obs_dirty
+                and not use_vision
+                and self._obs_cache is not None
+                and (time.time() - self._obs_cache_time) < self._obs_cache_ttl):
+            logger.info("Observation: using cached state (%.1fs old)",
+                        time.time() - self._obs_cache_time)
+            return self._obs_cache
+
         from vision import get_active_window_title
 
         # === LAYER 1: OS-level info (fast, always available) ===
@@ -2543,7 +2568,7 @@ class DesktopAgent:
                     blocked = True
                     break
 
-        return {
+        result = {
             "summary": description.strip(),
             "blocked": blocked,
             "foreground": window_title,
@@ -2555,6 +2580,13 @@ class DesktopAgent:
             "browser_content": browser_content,
             "ui_elements": ui_elements,
         }
+
+        # Store in cache
+        self._obs_cache = result
+        self._obs_cache_time = time.time()
+        self._obs_dirty = False
+
+        return result
 
     # ==================================================================
     # THINK — decide what to do next based on observation
@@ -2870,13 +2902,15 @@ class DesktopAgent:
         # --- STRATEGY PRE-CHECK: try fastest method first ---
         # Before using the standard tool dispatch, check if a faster
         # strategy (CLI, API, UIA, CDP) can handle this action directly.
+        # Skip strategies already tried by caller (brain._run_agent_mode).
         if tool_name and tool_name not in ("take_screenshot", "find_on_screen", "agent_task"):
             try:
                 from execution_strategies import get_selector
                 selector = get_selector()
                 step_desc = decision.get("reasoning", "") or f"{tool_name} {json.dumps(args)[:80]}"
                 fast_result, strategy_used = selector.execute_step(
-                    step_desc, action_registry=self.action_registry, skip_vision=True)
+                    step_desc, action_registry=self.action_registry, skip_vision=True,
+                    skip_strategies=self._skip_strategies if self._skip_strategies else None)
                 if fast_result and strategy_used:
                     self._think_log(f"Fast strategy '{strategy_used}' succeeded")
                     return fast_result

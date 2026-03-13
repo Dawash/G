@@ -1977,6 +1977,9 @@ class Brain:
             r'\b(order|book|buy|purchase)\b.*(online|pizza|food|ticket)',
             user_input, re.I)
 
+        # Track which strategies were tried (pass to agent to avoid retrying)
+        _tried_strategies = set()
+
         # Try fast strategies before expensive agent mode (non-UI tasks only)
         if not _ui_interactive:
             try:
@@ -1987,6 +1990,9 @@ class Brain:
                 if result and strategy:
                     logger.info(f"Agent mode shortcut: {strategy} handled '{user_input[:40]}'")
                     return result
+                # Record which strategies were attempted but didn't fully succeed
+                if hasattr(selector, '_last_tried_strategies'):
+                    _tried_strategies = set(selector._last_tried_strategies)
             except Exception as e:
                 logger.debug(f"Strategy pre-check failed: {e}")
         else:
@@ -1996,6 +2002,7 @@ class Brain:
         return run_agent_mode(
             user_input, self.action_registry, self.reminder_mgr,
             self.speak_fn, messages=self.messages,
+            skip_strategies=_tried_strategies,
         )
 
     def _run_research(self, user_input):
