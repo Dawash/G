@@ -1442,10 +1442,26 @@ def _record_outcome(strategy, category, success):
 
 
 def _strategy_confidence(strategy, category):
-    """Get confidence score for a strategy in a category (0.0-1.0)."""
+    """Get confidence score for a strategy in a category (0.0-1.0).
+
+    Combines in-session counts with persistent failure journal data.
+    """
     key = (strategy, category)
     successes = _success_counts.get(key, 0)
     failures = _failure_counts.get(key, 0)
+
+    # Augment with persistent failure journal data (route = strategy name)
+    try:
+        from core.failure_journal import get_default_journal
+        fj = get_default_journal()
+        if fj:
+            stats = fj.get_failure_stats()
+            route_failures = stats.get("by_route", {}).get(strategy, 0)
+            if route_failures > 0:
+                failures += route_failures
+    except Exception:
+        pass
+
     total = successes + failures
     if total == 0:
         return 0.5  # neutral — no data

@@ -164,11 +164,36 @@ class CDPSession:
             return []
 
     def is_chrome_debuggable(self):
-        """Check if Chrome is running with CDP enabled."""
-        return len(self._get_tabs()) > 0
+        """Check if Chrome is running with CDP enabled and WebSocket works."""
+        tabs = self._get_tabs()
+        if not tabs:
+            return False
+        # Verify WebSocket actually works (catches 403 from missing --remote-allow-origins)
+        ws_url = None
+        for t in tabs:
+            ws_url = t.get("webSocketDebuggerUrl")
+            if ws_url:
+                break
+        if not ws_url:
+            return True  # Has tabs but no WS URL — assume OK
+        try:
+            from websocket import create_connection
+            ws = create_connection(ws_url, timeout=3)
+            ws.close()
+            return True
+        except ImportError:
+            return True  # Can't verify, assume OK
+        except Exception:
+            logger.debug("CDP tabs reachable but WebSocket rejected (likely missing --remote-allow-origins)")
+            return False
 
     def ensure_chrome(self):
-        """Launch Chrome with remote debugging if not running."""
+        """Launch Chrome with remote debugging if not running.
+
+        Uses a separate user-data-dir so CDP Chrome runs as an independent
+        process even when regular Chrome is already open (avoids process
+        merging that blocks --remote-debugging-port).
+        """
         if self.is_chrome_debuggable():
             return True
 
@@ -182,17 +207,26 @@ class CDPSession:
             logger.warning("Chrome not found")
             return False
 
+        # Separate user-data-dir prevents merging into existing Chrome process
+        cdp_profile = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+                                   "G_Assistant", "chrome_cdp_profile")
+        os.makedirs(cdp_profile, exist_ok=True)
+
         try:
             subprocess.Popen(
                 [chrome_path, f"--remote-debugging-port={self._port}",
-                 "--no-first-run", "--no-default-browser-check"],
+                 f"--user-data-dir={cdp_profile}",
+                 "--remote-allow-origins=*",
+                 "--no-first-run", "--no-default-browser-check",
+                 "--disable-background-timer-throttling",
+                 "--disable-backgrounding-occluded-windows"],
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
             # Wait for Chrome to start
-            for _ in range(10):
+            for _ in range(15):
                 time.sleep(0.5)
                 if self.is_chrome_debuggable():
-                    logger.info("Chrome launched with CDP")
+                    logger.info("Chrome launched with CDP (separate profile)")
                     return True
             logger.warning("Chrome launched but CDP not responding")
             return False

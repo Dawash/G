@@ -42,12 +42,12 @@ _CDP_CHECK_INTERVAL = 30  # Re-check every 30s
 # CDP connection
 # ===================================================================
 
-def _check_cdp():
+def _check_cdp(force=False):
     """Check if Chrome DevTools Protocol is available."""
     global _cdp_available, _last_cdp_check
 
     now = time.time()
-    if _cdp_available is not None and (now - _last_cdp_check) < _CDP_CHECK_INTERVAL:
+    if not force and _cdp_available is not None and (now - _last_cdp_check) < _CDP_CHECK_INTERVAL:
         return _cdp_available
 
     _last_cdp_check = now
@@ -88,6 +88,7 @@ def _send_cdp_command(ws_url, method, params=None):
     """Send a command to a tab via CDP WebSocket.
 
     Returns the result dict or None on error.
+    Auto-relaunches Chrome if WebSocket is rejected (403 Forbidden).
     """
     try:
         from websocket import create_connection
@@ -105,6 +106,23 @@ def _send_cdp_command(ws_url, method, params=None):
         ws.close()
         return result.get("result")
     except Exception as e:
+        err_str = str(e)
+        if "403" in err_str or "Forbidden" in err_str:
+            # Chrome running without --remote-allow-origins — try to relaunch
+            logger.info("CDP WebSocket rejected (403), relaunching Chrome with correct flags")
+            try:
+                from automation.cdp_session import CDPSession
+                s = CDPSession()
+                if not s.is_chrome_debuggable():
+                    s.ensure_chrome()
+                    import time
+                    time.sleep(2)
+                    # Retry with fresh tab
+                    new_ws = _get_active_tab_ws()
+                    if new_ws and new_ws != ws_url:
+                        return _send_cdp_command(new_ws, method, params)
+            except Exception:
+                pass
         logger.debug(f"CDP command error ({method}): {e}")
         return None
 

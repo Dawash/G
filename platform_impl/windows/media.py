@@ -156,12 +156,12 @@ def play_music(action, query=None, app="spotify", last_user_input="", quick_chat
                 # Use CDP-enabled browser for proper web automation
                 _opened = False
                 try:
-                    from automation.browser_driver import browser_navigate, is_cdp_available
+                    from automation.browser_driver import browser_navigate, is_cdp_available, _check_cdp
                     if not is_cdp_available():
                         from automation.cdp_session import CDPSession
                         CDPSession().ensure_chrome()
                         time.sleep(2)
-                    if is_cdp_available():
+                    if _check_cdp(force=True) or is_cdp_available():
                         browser_navigate(url)
                         _opened = True
                 except Exception:
@@ -324,7 +324,7 @@ def _play_spotify_web(query):
         logger.debug("Spotify Web: browser_driver not available")
         return None
 
-    # Ensure CDP is available
+    # Ensure CDP is available (force=True after launch to bypass stale cache)
     if not _check_cdp():
         try:
             from automation.cdp_session import CDPSession
@@ -332,7 +332,7 @@ def _play_spotify_web(query):
             time.sleep(2)
         except Exception:
             pass
-    if not _check_cdp():
+    if not _check_cdp(force=True):
         logger.debug("Spotify Web: CDP not available")
         return None
 
