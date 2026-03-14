@@ -326,6 +326,18 @@ def run(runtime_state=None):
     if _restored:
         logger.info("Session restored from previous run")
 
+    # --- Startup health check (quick, critical systems only) ---
+    try:
+        from self_test import run_quick_check
+        _health = run_quick_check()
+        if "Issues" in _health:
+            logger.warning(f"Startup health check: {_health}")
+            print(f"  [Health] {_health}")
+        else:
+            logger.info(f"Startup health: {_health}")
+    except Exception as e:
+        logger.debug(f"Startup health check skipped: {e}")
+
     # Wire brain ref into alarm manager for LLM-generated motivations
     if alarm_mgr:
         alarm_mgr.brain_ref = brain
@@ -392,6 +404,16 @@ def run(runtime_state=None):
     # (previously we blocked up to 15s on warmup BEFORE greeting)
     startup_greeting(config, reminder_mgr, speak_fn=speak, speak_async_fn=speak_async)
     _ss.touch()
+
+    # Start PopupGuardian session-wide (catches popups in quick mode too, not just agent mode)
+    _popup_guardian = None
+    try:
+        from agents.popup_guardian import PopupGuardian
+        _popup_guardian = PopupGuardian(goal="session-wide popup dismissal")
+        _popup_guardian.start()
+        logger.info("PopupGuardian started (session-wide)")
+    except Exception as e:
+        logger.debug(f"PopupGuardian not available: {e}")
 
     if _startup_timer:
         try:
@@ -574,6 +596,11 @@ def run(runtime_state=None):
                 short = _llm_response(brain, "summarize this in 1 sentence: " + _ss.last_response[:300],
                                       user_input, uname)
                 _say(ainame, short)
+                # Track user's preference for shorter responses
+                try:
+                    preferences.track_response_preference(short=True)
+                except Exception:
+                    pass
                 continue
             elif meta == "more_detail" and _ss.last_response:
                 detail = brain.quick_chat(
@@ -583,6 +610,11 @@ def run(runtime_state=None):
                 if detail:
                     _ss.last_response = detail
                     _say(ainame, detail)
+                # Track user's preference for longer responses
+                try:
+                    preferences.track_response_preference(short=False)
+                except Exception:
+                    pass
                 continue
             elif meta == "repeat" and _ss.last_response:
                 _say(ainame, _ss.last_response)
@@ -739,6 +771,19 @@ def run(runtime_state=None):
                           {"input": user_input, "response": str(response)[:200]}),
                 )
                 _mem_thread.start()
+                # Log usage for habit tracking (enables proactive suggestions)
+                try:
+                    _trace = getattr(brain, 'last_call_trace', {})
+                    _tool_calls = _trace.get('tool_calls', [])
+                    if _tool_calls:
+                        for _tc in _tool_calls[:3]:  # Track up to 3 tools per request
+                            _tool_name = _tc.get('name', '')
+                            _tool_args = _tc.get('args', {}) if isinstance(_tc.get('args'), dict) else {}
+                            _entity = _tool_args.get('app_name', _tool_args.get('query', _tool_args.get('url', '')))
+                            if _tool_name:
+                                memory.log_usage(_tool_name, str(_entity)[:50] if _entity else '')
+                except Exception:
+                    pass
                 interrupted = _say_streaming(ainame, response)
                 _debug_trace(f"Loop#{interaction_count} post-say")
                 logger.info("_say_streaming() completed")

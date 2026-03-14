@@ -193,6 +193,17 @@ def startup_greeting(config, reminder_mgr, speak_fn, speak_async_fn):
     except Exception:
         pass
 
+    # Surface proactive suggestions from habit tracker
+    try:
+        from memory import HabitTracker, MemoryStore
+        _habit_memory = MemoryStore()
+        _habit_tracker = HabitTracker(_habit_memory)
+        _suggestions = _habit_tracker.suggest_proactive_actions()
+        if _suggestions:
+            parts.append(_suggestions[0])  # Just the top suggestion
+    except Exception:
+        pass
+
     parts.append("What can I do for you?")
 
     greeting = " ".join(parts)

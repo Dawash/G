@@ -1493,6 +1493,23 @@ def _verify_result(strategy, data, result_str):
             if domain:
                 conditions.append({"type": "url_contains", "value": domain})
 
+    # CLI: verify command produced output
+    if strategy == STRATEGY_CLI:
+        cmd = data.get("command", "")
+        # If the result is empty or just whitespace, it might have failed silently
+        if result_str and len(result_str.strip()) > 0:
+            return True
+        return False
+
+    # SETTINGS: verify settings window opened
+    if strategy == STRATEGY_SETTINGS:
+        uri = data.get("uri", "")
+        if uri and result_str and "opened" in result_str.lower():
+            return True
+        # Settings commands typically succeed if no error
+        if result_str and "error" not in result_str.lower():
+            return True
+
     elif strategy == STRATEGY_TOOL:
         tool_name = data.get("tool", "")
         if tool_name == "open_app":
@@ -1502,8 +1519,9 @@ def _verify_result(strategy, data, result_str):
         elif tool_name == "close_app":
             app_name = data.get("args", {}).get("name", "")
             if app_name:
-                # Verify process is NOT running (invert check)
-                pass  # can't express "not running" with postconditions
+                conditions.append({"type": "process_not_running", "value": app_name})
+        elif tool_name == "google_search":
+            conditions.append({"type": "url_contains", "value": "google.com"})
 
     if not conditions:
         return True  # No conditions to check — trust result string
@@ -1863,6 +1881,18 @@ class StrategySelector:
                 else:
                     logger.debug(f"Strategy '{strategy}' failed (verified={verified}): {result_str[:100]}")
                     _record_outcome(strategy, category, False)
+                    # Record in persistent failure journal for cross-session learning
+                    try:
+                        from core.failure_journal import record_failure
+                        record_failure(
+                            goal=step_description[:200],
+                            route=strategy,
+                            error_class="app_layout_drift" if not verified else "unknown",
+                            tool_sequence=[{"tool": strategy, "args": data}],
+                            error_text=result_str[:200],
+                        )
+                    except Exception:
+                        pass
 
         return (None, None)
 

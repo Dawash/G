@@ -97,13 +97,21 @@ TOOL_TIER_MAP: dict[str, ExecutionTier] = {
 
 # Domains/keywords that force Tier 3 regardless of tool
 _HUMAN_REQUIRED_DOMAINS = frozenset({
-    "payment", "checkout", "billing", "purchase", "buy",
+    # Financial
+    "payment", "checkout", "billing", "purchase", "buy", "order",
+    "credit card", "debit card", "bank", "paypal", "venmo", "stripe",
+    "wallet", "transaction", "transfer money", "wire transfer",
+    # Authentication
     "login", "sign in", "signin", "log in", "authenticate",
     "password", "credential", "two-factor", "2fa", "otp",
     "captcha", "recaptcha", "verify you are human",
+    # Sensitive data
+    "ssn", "social security", "tax", "medical record",
+    "passport", "driver license", "insurance",
+    # System privileges
     "admin", "uac", "elevation", "run as administrator",
-    "credit card", "debit card", "bank", "paypal", "venmo",
-    "ssn", "social security", "tax",
+    # Crypto/investment
+    "crypto", "bitcoin", "ethereum", "trading", "invest",
 })
 
 

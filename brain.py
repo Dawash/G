@@ -2173,6 +2173,17 @@ class Brain:
         if not user_input or not user_input.strip():
             return None
 
+        # --- NICKNAME RESOLUTION (Phase 10) ---
+        # Replace learned nicknames: "open my browser" → "open firefox"
+        if self.user_preferences:
+            try:
+                resolved_input = self.user_preferences.resolve_nickname(user_input)
+                if resolved_input != user_input:
+                    logger.info(f"Nickname resolved: '{user_input}' → '{resolved_input}'")
+                    user_input = resolved_input
+            except Exception:
+                pass
+
         # Skip brain entirely if key is known-dead
         if self._key_dead:
             return None
@@ -2324,6 +2335,15 @@ class Brain:
         if ambient:
             self.system_prompt += f"\n\nCONTEXT: {ambient}"
 
+        # Cognitive Phase 6: prompt adjustment from learned patterns
+        if self._cognition:
+            try:
+                _prompt_adj = self._cognition.get_prompt_adjustment(user_input)
+                if _prompt_adj:
+                    self.system_prompt += f"\n\nLEARNED ADJUSTMENT: {_prompt_adj}"
+            except Exception:
+                pass
+
         # Inject cognitive context (learning, comprehension, autonomy)
         if self._cognition:
             try:
@@ -2432,9 +2452,26 @@ class Brain:
 
             if result and mode == "quick" and (_is_partial or _is_ui_error):
                 reason = "partial completion" if _is_partial else "UI failure"
+                # Check failure journal for past similar failures — learn from history
+                _similar_hint = ""
+                try:
+                    from core.failure_journal import get_default_journal
+                    _fj = get_default_journal()
+                    if _fj:
+                        _similar = _fj.get_similar_failures(user_input, limit=2)
+                        if _similar:
+                            _hints = [f"Past failure: {r.error_text[:80]}" for r in _similar if r.error_text]
+                            if _hints:
+                                _similar_hint = " | ".join(_hints[:2])
+                                logger.info(f"Similar past failures found: {_similar_hint}")
+                except Exception:
+                    pass
                 logger.info(f"Quick mode {reason} — escalating to agent mode")
                 try:
-                    agent_result = self._run_agent_mode(user_input)
+                    _agent_goal = user_input
+                    if _similar_hint:
+                        _agent_goal = f"{user_input} (NOTE: past failures suggest: {_similar_hint})"
+                    agent_result = self._run_agent_mode(_agent_goal)
                     if agent_result and "error" not in str(agent_result).lower():
                         result = agent_result
                 except Exception as e:
