@@ -1143,7 +1143,7 @@ def _execute_tool_inner(tool_name, arguments, action_registry, reminder_mgr=None
                 return result or "Task completed."
             except FuturesTimeout:
                 agent.cancel()  # Signal agent to stop — frees Ollama
-                logger.warning(f"agent_task timed out after 3600s: {goal[:60]}")
+                logger.warning(f"agent_task timed out after 180s: {goal[:60]}")
                 return "Task took too long. Some steps may have completed."
 
         # spawn_agents, chain_tasks, reason_deeply, delegate_task handlers removed

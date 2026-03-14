@@ -48,8 +48,11 @@ def _handle_open_app(arguments, action_registry=None):
 
     # App category resolution: "browser" → user's preferred browser
     try:
-        from memory import UserPreferences, MemoryStore
-        _prefs = UserPreferences(MemoryStore())
+        from memory import UserPreferences
+        if not hasattr(handle_open_app, '_mem'):
+            from memory import MemoryStore
+            handle_open_app._mem = MemoryStore()
+        _prefs = UserPreferences(handle_open_app._mem)
         resolved = _prefs.resolve_app_category(name)
         if resolved.lower() != name.lower():
             logger.info(f"App category '{name}' → '{resolved}'")
