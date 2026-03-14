@@ -354,11 +354,15 @@ def get_forecast(city=None):
             return "No forecast data available."
 
         parts = [f"Forecast for {location['city']}:"]
-        now_hour = datetime.now().hour
 
         rain_expected = False
         for i in range(min(6, len(times))):
-            hour = (now_hour + i + 1) % 24
+            # Parse actual timestamp from API (e.g., "2026-03-14T15:00")
+            try:
+                _t = datetime.fromisoformat(times[i])
+                time_label = _t.strftime("%I:%M %p").lstrip("0")
+            except (ValueError, IndexError):
+                time_label = f"Hour {i+1}"
             temp_f = _c_to_f(temps[i]) if i < len(temps) else "?"
             desc = _describe_weather_code(codes[i]) if i < len(codes) else "unknown"
             rain_prob = rain_probs[i] if i < len(rain_probs) else 0
@@ -367,8 +371,7 @@ def get_forecast(city=None):
                 rain_expected = True
 
             if i == 0 or i == 2 or i == 5:
-                time_label = f"{hour:02d}:00"
-                parts.append(f"At {time_label}, {temp_f}°F, {desc}.")
+                parts.append(f"At {time_label}, {temp_f}F, {desc}.")
 
         if rain_expected:
             parts.append("Rain is expected — you might want an umbrella.")

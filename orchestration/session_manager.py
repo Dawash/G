@@ -114,8 +114,8 @@ def startup_greeting(config, reminder_mgr, speak_fn, speak_async_fn):
     """
     from weather import get_current_weather, check_rain_alert
 
-    uname = config["username"]
-    ainame = config["ai_name"]
+    uname = config.get("username", "User")
+    ainame = config.get("ai_name", "G")
     current_time = datetime.now().strftime("%I:%M %p")
 
     # --- SPOKEN parts (kept short) ---

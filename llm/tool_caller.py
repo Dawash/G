@@ -77,10 +77,11 @@ def think_native(brain):
                     return result
 
             # Check if content looks like unparseable JSON (LLM garbage)
-            if content and _looks_like_json_garbage(content):
-                extracted = _extract_tool_from_json(content)
-                if extracted:
-                    result = _handle_garbage_json(brain, extracted, content)
+            # Skip if we already tried extraction above (avoid double execution)
+            if content and _looks_like_json_garbage(content) and not extracted:
+                extracted2 = _extract_tool_from_json(content)
+                if extracted2:
+                    result = _handle_garbage_json(brain, extracted2, content)
                     if result is not None:
                         return result
 
@@ -409,10 +410,14 @@ def _execute_single_tool(brain, tc, _seen_tools, round_num):
     log_action("brain", fn_name, str(result)[:200],
                "error" not in str(result).lower())
 
+    # Truncate large tool results to prevent context overflow
+    _result_str = str(result) if result else "Done."
+    if len(_result_str) > 3000:
+        _result_str = _result_str[:3000] + f"...[truncated, {len(_result_str)} chars total]"
     brain.messages.append({
         "role": "tool",
         "tool_call_id": tc.get("id", f"call_{round_num}"),
-        "content": str(result) if result else "Done.",
+        "content": _result_str,
     })
     return None  # Continue to next round
 
@@ -473,10 +478,13 @@ def _execute_parallel_tools(brain, tool_calls, round_num):
     for tc in tool_calls:
         tc_id = tc["id"]
         result = results.get(tc_id, "Done.")
+        _r_str = str(result) if result else "Done."
+        if len(_r_str) > 3000:
+            _r_str = _r_str[:3000] + f"...[truncated, {len(_r_str)} chars total]"
         brain.messages.append({
             "role": "tool",
             "tool_call_id": tc_id,
-            "content": str(result) if result else "Done.",
+            "content": _r_str,
         })
 
 

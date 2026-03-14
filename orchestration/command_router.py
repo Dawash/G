@@ -49,8 +49,9 @@ def detect_meta_command(text):
         # Persist correction for speech learning
         try:
             from memory import MemoryStore
-            _mem = MemoryStore()
-            _mem.remember("speech_corrections", corrected.lower(), t)
+            if not hasattr(detect_meta_command, '_mem'):
+                detect_meta_command._mem = MemoryStore()
+            detect_meta_command._mem.remember("speech_corrections", corrected.lower(), t)
         except Exception:
             pass
         return ("correction", corrected)
@@ -59,7 +60,7 @@ def detect_meta_command(text):
 
 # --- Exit commands ---
 
-_EXIT_WORDS = frozenset(("quit", "exit", "bye", "see ya", "goodbye", "stop"))
+_EXIT_WORDS = frozenset(("quit", "exit", "bye", "see ya", "goodbye"))
 
 
 def is_exit_command(text):
