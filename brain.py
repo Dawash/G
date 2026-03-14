@@ -311,7 +311,7 @@ def _save_custom_tools():
             "code": info["code"], "created": info["created"],
         }
     try:
-        with open(CUSTOM_TOOLS_FILE, "w") as f:
+        with open(CUSTOM_TOOLS_FILE, "w", encoding="utf-8") as f:
             json.dump(save_data, f, indent=2)
     except Exception as e:
         logger.error(f"Failed to save custom tools: {e}")
@@ -322,7 +322,7 @@ def _load_custom_tools():
     if not os.path.exists(CUSTOM_TOOLS_FILE):
         return
     try:
-        with open(CUSTOM_TOOLS_FILE, "r") as f:
+        with open(CUSTOM_TOOLS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         for name, info in data.items():
             try:

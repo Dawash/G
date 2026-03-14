@@ -675,7 +675,7 @@ class DesktopAgent:
             "timestamp": time.time(),
         }
         try:
-            with open(_STATE_FILE, "w") as f:
+            with open(_STATE_FILE, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2)
         except Exception:
             pass
@@ -685,7 +685,7 @@ class DesktopAgent:
         try:
             if not os.path.exists(_STATE_FILE):
                 return None
-            with open(_STATE_FILE) as f:
+            with open(_STATE_FILE, encoding="utf-8") as f:
                 state = json.load(f)
             # Only resume if same goal and less than 5 min old
             if state.get("goal") == goal and time.time() - state.get("timestamp", 0) < 300:
@@ -707,7 +707,7 @@ class DesktopAgent:
         try:
             memory = {}
             if os.path.exists(_TOOL_MEMORY_FILE):
-                with open(_TOOL_MEMORY_FILE) as f:
+                with open(_TOOL_MEMORY_FILE, encoding="utf-8") as f:
                     memory = json.load(f)
             entry = memory.get(key, {"success": 0, "fail": 0})
             if success:
@@ -722,7 +722,7 @@ class DesktopAgent:
                 sorted_keys = sorted(memory, key=lambda k: memory[k].get("last_used", 0))
                 for old_key in sorted_keys[:len(memory) - 200]:
                     del memory[old_key]
-            with open(_TOOL_MEMORY_FILE, "w") as f:
+            with open(_TOOL_MEMORY_FILE, "w", encoding="utf-8") as f:
                 json.dump(memory, f, indent=2)
         except Exception as e:
             logger.debug(f"Tool memory write failed: {e}")
@@ -732,7 +732,7 @@ class DesktopAgent:
         try:
             if not os.path.exists(_TOOL_MEMORY_FILE):
                 return None
-            with open(_TOOL_MEMORY_FILE) as f:
+            with open(_TOOL_MEMORY_FILE, encoding="utf-8") as f:
                 memory = json.load(f)
             if args:
                 key = f"{tool_name}:{json.dumps(args, sort_keys=True)[:100]}"
@@ -1404,12 +1404,12 @@ class DesktopAgent:
             # Load existing learned hints
             learned = {}
             if os.path.exists(_LEARNED_HINTS_FILE):
-                with open(_LEARNED_HINTS_FILE) as f:
+                with open(_LEARNED_HINTS_FILE, encoding="utf-8") as f:
                     learned = json.load(f)
 
             # Analyze tool memory for high-failure tools
             if os.path.exists(_TOOL_MEMORY_FILE):
-                with open(_TOOL_MEMORY_FILE) as f:
+                with open(_TOOL_MEMORY_FILE, encoding="utf-8") as f:
                     memory = json.load(f)
 
                 # Aggregate failures by tool
@@ -1460,7 +1460,7 @@ class DesktopAgent:
 
             # Persist learned hints
             if learned:
-                with open(_LEARNED_HINTS_FILE, "w") as f:
+                with open(_LEARNED_HINTS_FILE, "w", encoding="utf-8") as f:
                     json.dump(learned, f, indent=2)
 
                 # Merge into runtime recovery hints
@@ -1577,7 +1577,7 @@ class DesktopAgent:
         """Load learned recovery hints from disk into runtime memory."""
         try:
             if os.path.exists(_LEARNED_HINTS_FILE):
-                with open(_LEARNED_HINTS_FILE) as f:
+                with open(_LEARNED_HINTS_FILE, encoding="utf-8") as f:
                     learned = json.load(f)
                 for key, hint in learned.items():
                     if key not in _RECOVERY_HINTS:
@@ -1617,7 +1617,7 @@ class DesktopAgent:
         try:
             if not os.path.exists(_TOOL_MEMORY_FILE):
                 return ""
-            with open(_TOOL_MEMORY_FILE) as f:
+            with open(_TOOL_MEMORY_FILE, encoding="utf-8") as f:
                 memory = json.load(f)
             hints = []
             # Find tools with high failure rates

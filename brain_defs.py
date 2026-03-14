@@ -65,6 +65,14 @@ _TERMINAL_BLOCKED = [
     "invoke-webrequest", "invoke-restmethod",
     "start-bitstransfer",
     "new-psdrive",
+    # Download-and-execute patterns (aliases + tools)
+    "iwr ", "irm ", "iwr(", "irm(",  # PowerShell aliases for Invoke-WebRequest/RestMethod
+    "| iex", "|iex", "invoke-expression",  # Download-and-execute pipeline
+    "mshta ", "wscript ", "cscript ",  # Script hosts for remote execution
+    "certutil -decode", "certutil -urlcache",  # Download/decode via certutil
+    "regsvr32 /s", "regsvr32 /u",  # DLL registration for remote code
+    "rundll32 ",  # DLL execution
+    "bitsadmin /transfer",  # Background download
 ]
 
 _TERMINAL_ADMIN_REQUIRED = [
@@ -118,7 +126,9 @@ def _run_terminal(command, admin=False):
 
     try:
         if admin:
-            ps_cmd = f'Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -Command {command}" -Wait'
+            # Escape command for safe embedding in PowerShell ArgumentList
+            safe_cmd = command.replace("'", "''").replace('"', '\\"')
+            ps_cmd = f"Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -Command {safe_cmd}' -Wait"
             result = subprocess.run(
                 ["powershell", "-NoProfile", "-Command", ps_cmd],
                 capture_output=True, text=True, timeout=timeout,

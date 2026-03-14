@@ -266,6 +266,9 @@ def _handle_agent_task(arguments, action_registry=None, reminder_mgr=None, speak
         agent.cancel()
         logger.warning(f"agent_task timed out after {_agent_timeout}s: {goal[:60]}")
         return "Task took too long. Some steps may have completed."
+    except Exception as e:
+        logger.error(f"agent_task failed: {e}", exc_info=True)
+        return f"Agent task failed: {e}"
 
 
 # ===================================================================
