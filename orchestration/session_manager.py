@@ -107,23 +107,24 @@ def _summarize_news(headlines):
 
 
 def startup_greeting(config, reminder_mgr, speak_fn, speak_async_fn):
-    """Greet the user with time, weather, news, reminders, battery. Parallelized.
+    """Greet the user — short spoken greeting + detailed console output.
 
-    Args:
-        config: Loaded config dict.
-        reminder_mgr: ReminderManager instance.
-        speak_fn: Blocking speak function.
-        speak_async_fn: Non-blocking speak function (for text mode).
+    Spoken: greeting + weather + rain + low battery + missed reminders (kept brief)
+    Console only: news, habit suggestions, active reminders count (not spoken)
     """
     from weather import get_current_weather, check_rain_alert
 
     uname = config["username"]
     ainame = config["ai_name"]
-    current_time = datetime.now().strftime("%A, %I:%M %p")
+    current_time = datetime.now().strftime("%I:%M %p")
 
-    parts = [f"{time_greeting()} {uname}! {ainame} here. It's {current_time}."]
+    # --- SPOKEN parts (kept short) ---
+    spoken = [f"{time_greeting()} {uname}! It's {current_time}."]
 
-    # Fetch weather, rain, battery, and news in parallel (saves 3-4 seconds)
+    # --- CONSOLE-ONLY parts (printed but not spoken) ---
+    console_extra = []
+
+    # Fetch weather, rain, battery, and news in parallel
     weather_result = [None]
     rain_result = [None]
     battery_result = [None]
@@ -166,54 +167,60 @@ def startup_greeting(config, reminder_mgr, speak_fn, speak_async_fn):
             except Exception:
                 pass
 
+    # Weather — spoken (short)
     if weather_result[0]:
-        parts.append(weather_result[0])
+        spoken.append(weather_result[0])
+    # Rain alert — spoken (important, actionable)
     if rain_result[0]:
-        parts.append(rain_result[0])
+        spoken.append(rain_result[0])
+    # Battery — spoken ONLY if low
     if battery_result[0]:
-        parts.append(battery_result[0])
+        spoken.append(battery_result[0])
 
-    # News — summarized for natural speech
-    if news_result[0]:
-        summary = _summarize_news(news_result[0])
-        if summary:
-            parts.append(summary)
-
-    active = [r for r in reminder_mgr.reminders if r.active]
-    if active:
-        parts.append(f"You have {len(active)} active reminder{'s' if len(active) > 1 else ''}.")
-
-    # Check for reminders that fired while the assistant was offline
+    # Missed reminders — spoken (actionable)
     try:
         missed = reminder_mgr.get_missed_reminders(max_age_hours=24)
         if missed:
-            parts.append(f"You missed {len(missed)} reminder{'s' if len(missed) > 1 else ''} while I was offline:")
-            for r in missed[:3]:
-                parts.append(f"  \"{r.message}\"")
+            spoken.append(f"You missed {len(missed)} reminder{'s' if len(missed) > 1 else ''}.")
+            for r in missed[:2]:
+                console_extra.append(f"  Missed: \"{r.message}\"")
     except Exception:
         pass
 
-    # Surface proactive suggestions from habit tracker
+    spoken.append("What can I do for you?")
+
+    # Active reminders — console only
+    active = [r for r in reminder_mgr.reminders if r.active]
+    if active:
+        console_extra.append(f"  Active reminders: {len(active)}")
+
+    # News — console only (no LLM call, no speaking)
+    if news_result[0]:
+        console_extra.append("  News: " + " | ".join(news_result[0][:3]))
+
+    # Habit suggestions — console only
     try:
         from memory import HabitTracker, MemoryStore
         _habit_memory = MemoryStore()
         _habit_tracker = HabitTracker(_habit_memory)
         _suggestions = _habit_tracker.suggest_proactive_actions()
         if _suggestions:
-            parts.append(_suggestions[0])  # Just the top suggestion
+            console_extra.append(f"  Suggestion: {_suggestions[0]}")
     except Exception:
         pass
 
-    parts.append("What can I do for you?")
-
-    greeting = " ".join(parts)
-    print(f"\n{ainame}: {greeting}")
+    # Print full info to console (spoken + extra)
+    greeting_spoken = " ".join(spoken)
+    print(f"\n{ainame}: {greeting_spoken}")
+    for line in console_extra:
+        print(line)
     sys.stdout.flush()
 
+    # Speak only the short version
     if os.environ.get("G_INPUT_MODE", "").lower() == "text":
-        speak_async_fn(greeting)
+        speak_async_fn(greeting_spoken)
     else:
-        speak_fn(greeting)
+        speak_fn(greeting_spoken)
 
 
 def should_auto_sleep(session_state, is_text_mode=False):
