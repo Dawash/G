@@ -86,13 +86,15 @@ def _summarize_news(headlines):
         if cfg:
             provider = create_provider(
                 cfg["provider"], cfg["api_key"],
-                "You are a friendly news anchor giving a quick morning briefing. "
+                "You are a friendly English-speaking news anchor giving a quick morning briefing. "
+                "ALWAYS respond in English only. Never use Chinese, Japanese, or any other language. "
                 "Be conversational and brief.",
                 ollama_model=cfg.get("ollama_model", DEFAULT_OLLAMA_MODEL),
                 ollama_url=cfg.get("ollama_url", DEFAULT_OLLAMA_URL))
             prompt = (
                 "Summarize the following news into exactly 2-3 SHORT sentences (max 50 words total). "
-                "Focus on what happened. Be conversational and concise — this is for a quick voice briefing.\n\n"
+                "Focus on what happened. Be conversational and concise — this is for a quick voice briefing. "
+                "IMPORTANT: Respond ONLY in English.\n\n"
                 f"{news_content}"
             )
             summary = provider.chat(prompt)
