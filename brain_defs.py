@@ -1014,7 +1014,7 @@ def _verify_tool_completion(tool_name, arguments, result, user_input=""):
 
     if tool_name == "play_music":
         action = arguments.get("action", "play")
-        if action in ("pause", "next", "previous", "volume_up", "volume_down", "mute"):
+        if action in ("pause", "next", "previous", "volume_up", "volume_down", "mute", "unmute"):
             return True, [], []
         result_lower = str(result).lower()
         # Only consider it fully complete if it says "Playing" (not "searched for" or "couldn't")

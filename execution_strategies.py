@@ -908,8 +908,10 @@ _DIRECT_TOOL_PATTERNS = [
     (r"(?:previous|prev|back)\s+(?:the\s+)?(?:song|track|music)",
      lambda m: {"tool": "play_music", "args": {"action": "previous"}}),
     # Volume/mute — single word or "volume up/down"
-    (r"^mute$|^unmute$",
+    (r"^mute$",
      lambda m: {"tool": "play_music", "args": {"action": "mute"}}),
+    (r"^unmute$",
+     lambda m: {"tool": "play_music", "args": {"action": "unmute"}}),
     (r"^volume\s+up$|^(?:turn|increase)\s+(?:the\s+)?volume(?:\s+up)?$|^louder$",
      lambda m: {"tool": "play_music", "args": {"action": "volume_up"}}),
     (r"^volume\s+down$|^(?:turn|decrease|lower)\s+(?:the\s+)?volume(?:\s+down)?$|^quieter$|^softer$",

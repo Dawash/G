@@ -211,9 +211,9 @@ def play_music(action, query=None, app="spotify", last_user_input="", quick_chat
             _press_media_key(VK_VOLUME_DOWN)
         return "Volume decreased."
 
-    elif action == "mute":
+    elif action in ("mute", "unmute"):
         _press_media_key(VK_VOLUME_MUTE)
-        return "Volume muted."
+        return "Volume unmuted." if action == "unmute" else "Volume muted."
 
     else:
         _press_media_key(VK_MEDIA_PLAY_PAUSE)
