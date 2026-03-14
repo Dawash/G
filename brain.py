@@ -2359,55 +2359,10 @@ class Brain:
                     self._skill_lib.record_use(skill_match["name"], success=False)
                 # Fall through to normal processing
 
-        # EARLY MODE CLASSIFICATION — skip expensive context setup for agent/research
-        decision = self._classify_mode(user_input)
-        _early_mode = decision.mode
-
-        if _early_mode == "agent":
-            logger.info("Mode: AGENT — routing to autonomous agent (skipping context setup)")
-            # Record user message in context for follow-up coherence
-            self._ctx.append({"role": "user", "content": user_input})
-            if self.speak_fn:
-                try:
-                    import random as _rnd
-                    _agent_acks = [
-                        "Working on it...", "Let me handle that...", "On it...",
-                        "Give me a moment...", "Let me take care of that...",
-                        "I'll get that done...", "Leave it to me...",
-                    ]
-                    self.speak_fn(_rnd.choice(_agent_acks))
-                except Exception:
-                    pass
-            result = self._run_agent_mode(user_input)
-            if result:
-                self._ctx.append({"role": "assistant", "content": str(result)[:500]})
-                self._ctx.trim()
-            return result
-
-        if _early_mode == "research":
-            logger.info("Mode: RESEARCH — multi-source web research (skipping context setup)")
-            # Record user message in context for follow-up coherence
-            self._ctx.append({"role": "user", "content": user_input})
-            if self.speak_fn:
-                try:
-                    import random as _rnd
-                    _research_acks = [
-                        "Let me research that for you...",
-                        "Let me dig into that...",
-                        "Researching that now...",
-                        "Let me find out...",
-                        "Looking that up for you...",
-                    ]
-                    self.speak_fn(_rnd.choice(_research_acks))
-                except Exception:
-                    pass
-            result = self._run_research(user_input)
-            if result:
-                self._ctx.append({"role": "assistant", "content": str(result)[:500]})
-                self._ctx.trim()
-            return result
-
-        # QUICK MODE — full context setup needed
+        # LLM-FIRST ARCHITECTURE: No mode classification.
+        # The LLM sees all tools (including agent_task, web_search_answer)
+        # and decides the right action itself. This eliminates routing bugs
+        # from regex-based classification and handles natural speech perfectly.
         # Lazy-load cognitive engine on first think() call
         self._ensure_cognition()
 
@@ -2522,12 +2477,13 @@ class Brain:
         }
 
         try:
-            # Mode already classified and agent/research already handled above.
-            # Only QUICK mode reaches here.
-            mode = "quick"
+            # LLM-FIRST: all requests reach here. The LLM decides the action
+            # via tool calls (agent_task for complex UI, web_search for research,
+            # or direct tools for simple tasks). No pre-classification needed.
+            mode = "llm_first"
             self.last_call_trace["mode"] = mode
 
-            # QUICK MODE: normal LLM tool calling
+            # LLM tool calling
             # Periodically retry native mode after transient failure
             if self._native_tools_failed and self._use_native_tools:
                 self._prompt_mode_calls += 1
@@ -2572,7 +2528,7 @@ class Brain:
                 ])
             )
 
-            if result and mode == "quick" and (_is_partial or _is_ui_error):
+            if result and (_is_partial or _is_ui_error):
                 reason = "partial completion" if _is_partial else "UI failure"
                 # Check failure journal for past similar failures — learn from history
                 _similar_hint = ""
