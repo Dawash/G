@@ -907,14 +907,14 @@ _DIRECT_TOOL_PATTERNS = [
      lambda m: {"tool": "play_music", "args": {"action": "next"}}),
     (r"(?:previous|prev|back)\s+(?:the\s+)?(?:song|track|music)",
      lambda m: {"tool": "play_music", "args": {"action": "previous"}}),
-    # Volume/mute — single word or "volume up/down"
+    # Volume/mute — single word, "volume up/down", natural speech
     (r"^mute$",
      lambda m: {"tool": "play_music", "args": {"action": "mute"}}),
     (r"^unmute$",
      lambda m: {"tool": "play_music", "args": {"action": "unmute"}}),
-    (r"^volume\s+up$|^(?:turn|increase)\s+(?:the\s+)?volume(?:\s+up)?$|^louder$",
+    (r"^volume\s+up$|^(?:turn|increase)\s+(?:the\s+)?volume(?:\s+up)?$|^louder$|^(?:make|turn)\s+it\s+louder$|^turn\s+(?:it\s+)?up$",
      lambda m: {"tool": "play_music", "args": {"action": "volume_up"}}),
-    (r"^volume\s+down$|^(?:turn|decrease|lower)\s+(?:the\s+)?volume(?:\s+down)?$|^quieter$|^softer$",
+    (r"^volume\s+down$|^(?:turn|decrease|lower)\s+(?:the\s+)?volume(?:\s+down)?$|^quieter$|^softer$|^(?:make|turn)\s+it\s+(?:quieter|softer)$|^turn\s+(?:it\s+)?down$|^a\s+bit\s+(?:quieter|softer|lower)$",
      lambda m: {"tool": "play_music", "args": {"action": "volume_down"}}),
 
     # Screenshot

@@ -146,7 +146,7 @@ def play_music(action, query=None, app="spotify", last_user_input="", quick_chat
                 if _guardian:
                     _guardian.stop()
 
-            return f"Searched for '{query}' on Spotify but couldn't auto-play. Click a result to play."
+            return f"I found results for '{query}' on Spotify, but couldn't start playback automatically."
 
         elif app == "youtube":
             try:
@@ -179,7 +179,7 @@ def play_music(action, query=None, app="spotify", last_user_input="", quick_chat
             finally:
                 if _guardian:
                     _guardian.stop()
-            return f"Searched for '{query}' on YouTube but couldn't auto-play. Click a result to play."
+            return f"I found results for '{query}' on YouTube, but couldn't start playback automatically."
 
     elif action == "play":
         if app == "spotify":
@@ -204,12 +204,12 @@ def play_music(action, query=None, app="spotify", last_user_input="", quick_chat
     elif action in ("volume_up", "louder"):
         for _ in range(5):
             _press_media_key(VK_VOLUME_UP)
-        return "Volume increased."
+        return "Turned the volume up."
 
     elif action in ("volume_down", "quieter"):
         for _ in range(5):
             _press_media_key(VK_VOLUME_DOWN)
-        return "Volume decreased."
+        return "Turned the volume down."
 
     elif action in ("mute", "unmute"):
         _press_media_key(VK_VOLUME_MUTE)

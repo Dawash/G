@@ -129,7 +129,8 @@ _RE_KNOWLEDGE_START = re.compile(
 _RE_ACTION_WORDS = re.compile(
     r'\b(open|close|launch|install|set|create|send|search for|files?|apps?'
     r'|download|reminders?|weather|forecast|news|screenshots?|alarms?|emails?'
-    r'|desktop|windows?|click|type|tabs?|processes?|battery|wifi|network)\b', re.I
+    r'|desktop|windows?|click|type|tabs?|processes?|battery|wifi|network'
+    r'|play|turn on|turn off|toggle|minimize|maximize|mute|volume)\b', re.I
 )
 _RE_TIME_DATE = re.compile(r'\b(what|the) (time|date|day)\b', re.I)
 _RE_SYSTEM_QUERY = re.compile(r'\b(my |check |how much |what\'?s? my )(ram|cpu|disk|time)\b', re.I)
@@ -1965,6 +1966,8 @@ class Brain:
             _PARTIAL_INDICATORS = [
                 "not confirmed", "couldn't auto-play", "click a result",
                 "try clicking", "but couldn't", "but playback",
+                "searched for", "couldn't click", "couldn't play",
+                "couldn't start playback",
             ]
             result_lower = str(result).lower()
             if any(ind in result_lower for ind in _PARTIAL_INDICATORS):
@@ -1994,11 +1997,22 @@ class Brain:
             return raw_output
 
         # Already-natural sentence output (CLI patterns often return ready-to-speak text)
-        # Detect: starts with word, ends with period, contains human words, no table chars
+        # Detect: starts with capital letter, contains numbers/units, no table chars
         _clean = raw_output.strip()
-        if (_clean and _clean[0].isupper() and _clean.endswith('.')
-                and not any(c in _clean for c in ['|', '\t', '{', '}', '\\\\'])
-                and any(w in _clean.lower() for w in ['is ', 'are ', 'has ', 'have ', 'your ', 'you '])):
+        _is_natural = (
+            _clean and _clean[0].isupper()
+            and not any(c in _clean for c in ['|', '\t', '{', '}', '\\\\'])
+            and (
+                any(w in _clean.lower() for w in [
+                    'is ', 'are ', 'has ', 'have ', 'your ', 'you ',
+                    'gb', 'mb', 'cpu', '%', 'free', 'used', 'running',
+                    'battery', 'charging', 'processes', 'drive ',
+                ])
+                or (_clean.endswith('.') and len(_clean) > 20)
+                or (any(c.isdigit() for c in _clean) and _clean[0].isupper())
+            )
+        )
+        if _is_natural:
             return _clean
 
         try:
@@ -2030,9 +2044,10 @@ class Brain:
 
         result_str = str(result).lower()
 
-        # Check only the first 80 chars for failure indicators —
-        # avoids false positives from content like "no fog found today"
-        _result_prefix = result_str[:80]
+        # Check first and last 80 chars for failure indicators —
+        # first: catches direct failures; last: catches tail errors in long results
+        # avoids false positives from mid-content like "no fog found today"
+        _result_prefix = result_str[:80] + " " + result_str[-80:]
         if any(w in _result_prefix for w in [
             "error", "failed", "not found", "blocked", "timed out",
             "permission denied", "could not", "couldn't", "invalid",

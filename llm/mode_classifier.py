@@ -103,7 +103,7 @@ DIRECT_TOOL_PATTERNS = [
     (re.compile(r"(create|make|build|generate|write)\s+(a |an |me )?(simple |basic |beautiful )?(calculator|page|website|html|script|file|document|app|application|program|game|form|landing)", re.I), "create_file"),
     # Generic music without specifying app — quick mode play_music handles media keys
     # ^anchor ensures "open youtube and play jazz" doesn't match (→ agent mode instead)
-    (re.compile(r"^(play|listen to)\s+(some |a |the |my )?(good |best |romantic |awesome |sad |soft |hard |classic )?(music|song|songs|track|tracks|playlist|album|rock|jazz|pop|blues|country|hip.?hop|rap|metal|classical|lo.?fi|chill|edm)$", re.I), "play_music"),
+    (re.compile(r"^(play|listen to|put on)\s+(some |a |the |my )?(good |best |romantic |awesome |sad |soft |hard |classic |chill )?(music|song|songs|track|tracks|playlist|album|rock|jazz|pop|blues|country|hip.?hop|rap|metal|classical|lo.?fi|chill|edm)$", re.I), "play_music"),
     # NOTE: "play X on spotify/youtube" intentionally NOT here — routed to agent mode
     # for proper UI interaction (search → click result → verify playback)
     # Screenshot
@@ -190,9 +190,10 @@ def classify_mode(user_input, quick_chat_fn=None):
                 r"explain .+ in detail\b",
                 r"\bhistory of\b", r"\bevolution of\b",
                 r"search for .+(history|overview|guide|tutorial)\b",
-                # Knowledge questions needing multi-source research
-                r"^what (?:is|are) (?!the (?:time|date|weather|temperature|forecast))\w.{8,}",
-                r"^(?:how|why) (?:does|do|is|are|did|can|could|would|should) .{10,}",
+                # Knowledge questions needing multi-source research (6+ words)
+                # Short factual questions ("what is the capital of france") go to quick_chat
+                r"^what (?:is|are) (?!the (?:time|date|weather|temperature|forecast|capital))\w.{25,}",
+                r"^(?:how|why) (?:does|do|is|are|did|can|could|would|should) .{25,}",
             ]
             for pattern in research_triggers:
                 if re.search(pattern, lower):
