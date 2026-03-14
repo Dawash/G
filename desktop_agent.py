@@ -67,7 +67,7 @@ MAX_RECON_TURNS = 3           # Max turns for reconnaissance phase
 MAX_EXECUTE_TURNS = 999        # Max turns for execution phase
 CHECKPOINT_INTERVAL = 3       # Checkpoint every N actions
 MAX_BACKTRACK_ATTEMPTS = 2    # Max replans before giving up
-TAKEOVER_TIMEOUT = 3600        # Seconds to wait for user on sensitive screens
+TAKEOVER_TIMEOUT = 120         # Seconds to wait for user on sensitive screens
 
 # Takeover patterns — agent pauses for user on these screens
 _TAKEOVER_PATTERNS = [
@@ -764,8 +764,8 @@ class DesktopAgent:
 
         available, msg = ensure_vision_model()
         if not available:
-            logger.warning(f"Vision not available: {msg}")
-            return f"I can't see the screen yet. {msg}"
+            logger.warning(f"Vision not available (proceeding without): {msg}")
+            # Don't block — many tasks work with UIA/CDP/CLI observation alone
 
         DesktopAgent._active_instance = self
         self._history = []
@@ -2172,9 +2172,8 @@ class DesktopAgent:
                         brace_depth -= 1
                         if brace_depth == 0:
                             raw = content[start:i+1]
-                            # Strip comments
-                            raw = re.sub(r'//[^\n]*', '', raw)
-                            raw = re.sub(r'#[^\n]*', '', raw)
+                            # Strip trailing commas (common LLM mistake) but NOT
+                            # // or # comments — they corrupt URLs inside strings
                             raw = re.sub(r',\s*}', '}', raw)
                             raw = re.sub(r',\s*]', ']', raw)
                             fix = json.loads(raw)

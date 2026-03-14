@@ -729,19 +729,22 @@ def run(runtime_state=None):
             try:
                 _t0 = time.time()
                 # Run brain.think() with a hard timeout to prevent hangs
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _pool:
-                    _fut = _pool.submit(
-                        brain.think, user_input,
-                        detected_language=get_detected_language()
-                    )
-                    try:
-                        response = _fut.result(timeout=_BRAIN_TIMEOUT)
-                    except concurrent.futures.TimeoutError:
-                        logger.error(f"Brain.think() timed out after {_BRAIN_TIMEOUT}s")
-                        _debug_trace(f"Loop#{interaction_count} TIMEOUT after {_BRAIN_TIMEOUT}s")
-                        # Signal Brain to stop between tool rounds
-                        brain._cancelled = True
-                        response = "Sorry, that took too long. Could you try again?"
+                # Don't use `with` — shutdown(wait=True) would block on timeout
+                _pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                _fut = _pool.submit(
+                    brain.think, user_input,
+                    detected_language=get_detected_language()
+                )
+                try:
+                    response = _fut.result(timeout=_BRAIN_TIMEOUT)
+                except concurrent.futures.TimeoutError:
+                    logger.error(f"Brain.think() timed out after {_BRAIN_TIMEOUT}s")
+                    _debug_trace(f"Loop#{interaction_count} TIMEOUT after {_BRAIN_TIMEOUT}s")
+                    # Signal Brain to stop between tool rounds
+                    brain._cancelled = True
+                    response = "Sorry, that took too long. Could you try again?"
+                finally:
+                    _pool.shutdown(wait=False)
                 _elapsed = time.time() - _t0
                 logger.info(f"Brain returned in {_elapsed:.1f}s: {str(response)[:80] if response else 'None'}")
                 _debug_trace(f"Loop#{interaction_count} brain={_elapsed:.1f}s resp={'yes' if response else 'None'}")

@@ -98,6 +98,22 @@ def cache_store(text, result, strategy):
 _CLI_BLOCKED = {"format", "del /s", "rm -rf", "remove-item c:", "remove-item /",
                 "reg delete", "shutdown", "restart", "stop-computer"}
 
+
+def _sanitize_ps(text):
+    """Sanitize user input for safe interpolation into PowerShell single-quoted strings.
+
+    - Escapes single quotes ('' is the PS escape for ' inside single-quoted strings)
+    - Strips characters that could break out of string context: backticks, semicolons,
+      pipes, ampersands, dollar signs, parentheses, and newlines.
+    """
+    if not text:
+        return ""
+    # Escape single quotes for PS single-quoted string interpolation
+    text = text.replace("'", "''")
+    # Strip dangerous shell metacharacters
+    text = re.sub(r"[`;\|&\$\(\)\{\}\n\r]", "", text)
+    return text.strip()
+
 def _list_files_cmd(location):
     """Generate PowerShell command to list files in a known location."""
     _DOTNET_FOLDERS = {
@@ -110,30 +126,32 @@ def _list_files_cmd(location):
     }
     loc_lower = location.lower()
     dotnet_name = _DOTNET_FOLDERS.get(loc_lower)
+    safe_loc = _sanitize_ps(location)
     if loc_lower == "downloads":
         path_line = "$p = Join-Path $env:USERPROFILE 'Downloads'"
     elif dotnet_name:
         path_line = f"$p = [Environment]::GetFolderPath('{dotnet_name}')"
     else:
-        path_line = f"$p = Join-Path $env:USERPROFILE '{location}'"
+        path_line = f"$p = Join-Path $env:USERPROFILE '{safe_loc}'"
     return (
         f"{path_line}; "
         f"$items = Get-ChildItem $p -ErrorAction SilentlyContinue | Select-Object -First 20 Name; "
-        f"if ($items) {{ 'Files on your {location}: ' + (($items).Name -join ', ') + '.' }} "
-        f"else {{ 'No files found on your {location}.' }}"
+        f"if ($items) {{ 'Files on your {safe_loc}: ' + (($items).Name -join ', ') + '.' }} "
+        f"else {{ 'No files found on your {safe_loc}.' }}"
     )
 
 
 def _ram_per_app_cmd(app_name):
     """Generate PowerShell command to check RAM usage for a specific app."""
+    safe_name = _sanitize_ps(app_name)
     return (
-        f"Get-Process -Name '*{app_name}*' -ErrorAction SilentlyContinue | "
+        f"Get-Process -Name '*{safe_name}*' -ErrorAction SilentlyContinue | "
         "Measure-Object WorkingSet64 -Sum | ForEach-Object { "
         "$mb = [math]::Round($_.Sum/1MB); "
         "if($mb -ge 1024) { "
-        f"'{app_name} is using ' + [math]::Round($mb/1024,1).ToString() + ' GB of RAM' "
+        f"'{safe_name} is using ' + [math]::Round($mb/1024,1).ToString() + ' GB of RAM' "
         "} else { "
-        f"'{app_name} is using ' + $mb.ToString() + ' MB of RAM' "
+        f"'{safe_name} is using ' + $mb.ToString() + ' MB of RAM' "
         "} }"
     )
 
@@ -141,9 +159,9 @@ def _ram_per_app_cmd(app_name):
 _CLI_COMMANDS = [
     # Software management (winget)
     (r"\b(?:install|setup)\s+(.+?)(?:\s+app|\s+program)?$",
-     lambda m: f'winget install --accept-source-agreements --accept-package-agreements "{m.group(1).strip()}"'),
+     lambda m: f"winget install --accept-source-agreements --accept-package-agreements '{_sanitize_ps(m.group(1).strip())}'"),
     (r"\buninstall\s+(.+?)(?:\s+app|\s+program)?$",
-     lambda m: f'winget uninstall "{m.group(1).strip()}"'),
+     lambda m: f"winget uninstall '{_sanitize_ps(m.group(1).strip())}'"),
     (r"\bupdate\s+(?:all|everything|apps?|software)",
      lambda m: "winget upgrade --all --accept-source-agreements"),
     (r"\blist\s+installed\s+(?:apps?|programs?|software)",
@@ -203,7 +221,7 @@ _CLI_COMMANDS = [
 
     # Process management
     (r"\bkill\s+(.+?)(?:\s+process)?$",
-     lambda m: f"Stop-Process -Name '{m.group(1).strip()}' -Force -ErrorAction SilentlyContinue; 'Killed {m.group(1).strip()}'"),
+     lambda m: f"Stop-Process -Name '{_sanitize_ps(m.group(1).strip())}' -Force -ErrorAction SilentlyContinue; 'Killed {_sanitize_ps(m.group(1).strip())}'"),
     (r"\b(?:list|show|running)\s*(?:process(?:es)?|apps?|programs?)",
      lambda m: "Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 20 Name,@{N='CPU(s)';E={[math]::Round($_.CPU,1)}},@{N='RAM(MB)';E={[math]::Round($_.WS/1MB)}} | Format-Table -AutoSize"),
 
@@ -213,7 +231,7 @@ _CLI_COMMANDS = [
 
     # Network
     (r"\bwifi\s*(?:connect|join)\s+(.+)",
-     lambda m: f'netsh wlan connect name="{m.group(1).strip()}"'),
+     lambda m: f"netsh wlan connect name='{_sanitize_ps(m.group(1).strip())}'"),
     (r"\bwifi\s*(?:disconnect|off)|(?:turn|switch)\s+off\s+(?:the\s+)?wi-?fi|(?:disable)\s+wi-?fi",
      lambda m: "netsh wlan disconnect; 'WiFi disconnected'"),
     (r"(?:turn|switch)\s+on\s+(?:the\s+)?wi-?fi|(?:enable)\s+wi-?fi",
@@ -223,7 +241,7 @@ _CLI_COMMANDS = [
     (r"(?:show|list|what(?:'s)?|check)\s+(?:me\s+)?(?:my\s+)?(?:network|internet)\s*(?:connections?|interfaces?|adapters?|status)",
      lambda m: "$adapters = Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { $ip = (Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).IPAddress; \"$($_.Name) is connected at $($_.LinkSpeed)\" + $(if($ip){\" with IP $ip\"}else{''}) }; \"Your active network connections: \" + ($adapters -join ', ') + '.'"),
     (r"\bping\s+(\S+)",
-     lambda m: f"ping -n 4 {m.group(1).strip()}"),
+     lambda m: f"ping -n 4 '{_sanitize_ps(m.group(1).strip())}'"),
     (r"\bflush\s*dns|clear\s*dns",
      lambda m: "Clear-DnsClientCache; 'DNS cache flushed'"),
     (r"\bpublic\s*ip",
@@ -250,9 +268,9 @@ _CLI_COMMANDS = [
     (r"\b(?:empty|clear)\s*(?:recycle\s*bin|trash)",
      lambda m: "Clear-RecycleBin -Force -ErrorAction SilentlyContinue; 'Recycle bin emptied'"),
     (r"\b(?:create|make|new)\s*(?:folder|directory)\s+(.+)",
-     lambda m: f"New-Item -ItemType Directory -Path '{m.group(1).strip()}' -Force | Select-Object FullName"),
+     lambda m: f"New-Item -ItemType Directory -Path '{_sanitize_ps(m.group(1).strip())}' -Force | Select-Object FullName"),
     (r"\bfolder\s*size\s+(.+)",
-     lambda m: f"(Get-ChildItem '{m.group(1).strip()}' -Recurse -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB | ForEach-Object {{ '{0:N1} MB' -f $_ }}"),
+     lambda m: f"(Get-ChildItem '{_sanitize_ps(m.group(1).strip())}' -Recurse -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB | ForEach-Object {{ '{{0:N1}} MB' -f $_ }}"),
     (r"\btemp\s*(?:files?)?\s*(?:clean|clear|delete|remove)|(?:clean|clear|delete|remove)\s+(?:up\s+)?(?:my\s+)?temp(?:orary)?\s*(?:files?)?",
      lambda m: "$before = (Get-ChildItem $env:TEMP -Recurse -ErrorAction SilentlyContinue | Measure-Object).Count; Remove-Item $env:TEMP\\* -Recurse -Force -ErrorAction SilentlyContinue; $after = (Get-ChildItem $env:TEMP -Recurse -ErrorAction SilentlyContinue | Measure-Object).Count; \"Cleaned $($before - $after) temp files\""),
 
@@ -260,7 +278,7 @@ _CLI_COMMANDS = [
     (r"\bclipboard\s*(?:content|text|show|get)",
      lambda m: "Get-Clipboard"),
     (r"\bcopy\s+(?:text\s+)?['\"](.+?)['\"](?:\s+to\s+clipboard)?",
-     lambda m: f"Set-Clipboard -Value '{m.group(1)}'; 'Copied to clipboard'"),
+     lambda m: f"Set-Clipboard -Value '{_sanitize_ps(m.group(1))}'; 'Copied to clipboard'"),
 
     # Environment
     (r"\benv(?:ironment)?\s*(?:var(?:iable)?s?)\s*(?:list|show)?",
@@ -277,14 +295,23 @@ _CLI_COMMANDS = [
 def match_cli_command(text):
     """Check if text can be handled via CLI. Returns PowerShell command or None."""
     lower = text.lower().strip()
-    # Safety check
+    # Safety check on user input
     for blocked in _CLI_BLOCKED:
         if blocked in lower:
             return None
     for pattern, cmd_fn in _CLI_COMMANDS:
         m = re.search(pattern, lower)
         if m:
-            return cmd_fn(m)
+            command = cmd_fn(m)
+            # Safety check on generated command (user input may craft
+            # values that produce dangerous commands after interpolation)
+            if command:
+                cmd_lower = command.lower()
+                for blocked in _CLI_BLOCKED:
+                    if blocked in cmd_lower:
+                        logger.warning(f"CLI blocked generated command: {command[:80]}")
+                        return None
+            return command
     return None
 
 

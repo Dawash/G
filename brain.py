@@ -31,6 +31,15 @@ import requests
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
+# Cached MemoryStore singleton — avoids leaking SQLite connections
+_memory_store_cache = None
+def _get_memory_store():
+    global _memory_store_cache
+    if _memory_store_cache is None:
+        from memory import MemoryStore
+        _memory_store_cache = MemoryStore()
+    return _memory_store_cache
+
 from brain_defs import (
     build_tool_definitions,
     _TERMINAL_BLOCKED, _TERMINAL_ADMIN_REQUIRED, _FILE_BLOCKED_DIRS,
@@ -376,7 +385,7 @@ def _play_music(action, query=None, app="spotify"):
                             quick_chat_fn=quick_chat_fn)
 
 
-def _run_agent_with_timeout(goal, timeout=3600, blocking=True):
+def _run_agent_with_timeout(goal, timeout=180, blocking=True):
     """Run desktop agent with a timeout to prevent blocking Ollama.
 
     If blocking=False, fires agent in background thread and returns immediately.
@@ -603,8 +612,7 @@ def execute_tool(tool_name, arguments, action_registry, reminder_mgr=None, speak
         if tool_name == "open_app" and result:
             app_name = arguments.get("name", "")
             try:
-                from memory import MemoryStore
-                _m = MemoryStore()
+                _m = _get_memory_store()
                 if "not found" in str(result).lower():
                     _m.record_app_status(app_name, False)
                 else:
@@ -757,8 +765,8 @@ def _execute_tool_inner(tool_name, arguments, action_registry, reminder_mgr=None
                     return f"Opening {os.path.basename(_brain_state.last_created_file)}"
             # App category resolution: "browser" → user's preferred browser
             try:
-                from memory import UserPreferences, MemoryStore
-                _prefs = UserPreferences(MemoryStore())
+                from memory import UserPreferences
+                _prefs = UserPreferences(_get_memory_store())
                 resolved = _prefs.resolve_app_category(name)
                 if resolved.lower() != name.lower():
                     logger.info(f"App category '{name}' → '{resolved}'")
@@ -1132,7 +1140,7 @@ def _execute_tool_inner(tool_name, arguments, action_registry, reminder_mgr=None
             try:
                 with ThreadPoolExecutor(max_workers=1) as pool:
                     future = pool.submit(agent.execute, goal)
-                    result = future.result(timeout=3600)
+                    result = future.result(timeout=180)
                 return result or "Task completed."
             except FuturesTimeout:
                 agent.cancel()  # Signal agent to stop — frees Ollama
@@ -1628,8 +1636,8 @@ class Brain:
             app_name = _open_match.group(1).strip()
             # Resolve category names: "browser" → "chrome", "editor" → "notepad"
             try:
-                from memory import UserPreferences, MemoryStore
-                _prefs = UserPreferences(MemoryStore())
+                from memory import UserPreferences
+                _prefs = UserPreferences(_get_memory_store())
                 resolved = _prefs.resolve_app_category(app_name)
                 if resolved.lower() != app_name.lower():
                     logger.info(f"Direct dispatch: open_app category '{app_name}' → '{resolved}'")
@@ -1743,8 +1751,22 @@ class Brain:
                         safe_expr = safe_expr.replace('sqrt(', '(')  # Will use ** 0.5
                         safe_expr = safe_expr.rstrip(')') + ') ** 0.5'
                     if _re.match(r'^[\d\s+\-*/.()]+$', safe_expr):
-                        answer = eval(safe_expr)  # Safe: only math chars allowed
-                        ans_str = f"{answer:g}" if isinstance(answer, float) else str(answer)
+                        # Guard against CPU-exhausting exponentiation
+                        if '**' in safe_expr:
+                            # Block chains like 10**10**10 or huge exponents
+                            _exp_parts = safe_expr.split('**')
+                            if len(_exp_parts) > 2:
+                                pass  # skip chained exponentiation
+                            elif any(float(p.strip()) > 1000 for p in _exp_parts if p.strip().replace('.', '').isdigit()):
+                                pass  # skip huge exponents
+                            else:
+                                import ast
+                                answer = eval(compile(ast.parse(safe_expr, mode='eval'), '<math>', 'eval'))
+                                ans_str = f"{answer:g}" if isinstance(answer, float) else str(answer)
+                        else:
+                            import ast
+                            answer = eval(compile(ast.parse(safe_expr, mode='eval'), '<math>', 'eval'))
+                            ans_str = f"{answer:g}" if isinstance(answer, float) else str(answer)
                         logger.info(f"Direct dispatch: math fast-path ({expr} = {ans_str})")
                         return f"{expr} = {ans_str}"
                 except ZeroDivisionError:
@@ -2316,21 +2338,33 @@ class Brain:
 
         if _early_mode == "agent":
             logger.info("Mode: AGENT — routing to autonomous agent (skipping context setup)")
+            # Record user message in context for follow-up coherence
+            self._ctx.append({"role": "user", "content": user_input})
             if self.speak_fn:
                 try:
                     self.speak_fn("Working on it...")
                 except Exception:
                     pass
-            return self._run_agent_mode(user_input)
+            result = self._run_agent_mode(user_input)
+            if result:
+                self._ctx.append({"role": "assistant", "content": str(result)[:500]})
+                self._ctx.trim()
+            return result
 
         if _early_mode == "research":
             logger.info("Mode: RESEARCH — multi-source web research (skipping context setup)")
+            # Record user message in context for follow-up coherence
+            self._ctx.append({"role": "user", "content": user_input})
             if self.speak_fn:
                 try:
                     self.speak_fn("Let me research that for you...")
                 except Exception:
                     pass
-            return self._run_research(user_input)
+            result = self._run_research(user_input)
+            if result:
+                self._ctx.append({"role": "assistant", "content": str(result)[:500]})
+                self._ctx.trim()
+            return result
 
         # QUICK MODE — full context setup needed
         # Lazy-load cognitive engine on first think() call
@@ -2538,7 +2572,7 @@ class Brain:
                 has_error = any(w in result_lower for w in ["error", "failed", "not found", "couldn't"])
                 # Save multi-tool sequences, or single interactive tools that succeeded
                 _interactive_tools = {"play_music", "search_in_app", "agent_task", "google_search"}
-                is_interactive = any(tc.get("name") in _interactive_tools for tc in tool_calls_for_skill)
+                is_interactive = any(tc.get("tool") in _interactive_tools for tc in tool_calls_for_skill)
                 if not has_error and (len(tool_calls_for_skill) >= 2 or is_interactive):
                     try:
                         self._save_as_skill(user_input, tool_calls_for_skill)
