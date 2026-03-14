@@ -36,7 +36,7 @@ QUICK_PATTERNS = [
     re.compile(r"^(turn on|turn off|toggle|enable|disable)\s+(dark mode|bluetooth|wifi|wi-fi|night light|airplane)", re.I),
     re.compile(r"^(shutdown|restart|sleep|cancel shutdown)$", re.I),
     re.compile(r"^(pause|resume|next|previous|skip|volume|mute|unmute)\s*(up|down|music|song|track)?$", re.I),
-    re.compile(r"^(hey|hi|hello|good (morning|afternoon|evening)|how are you|thanks?|thank you)", re.I),
+    re.compile(r"^(hey|hi|hello|good (morning|afternoon|evening)|how are you|thanks?|thank you)\b", re.I),
     re.compile(r"(introduce yourself|tell .+ about yourself|who are you|what can you do|what are you|describe yourself)", re.I),
     # Terminal / system info queries
     re.compile(r"^(how much|check( my)?|what'?s? my) (disk|storage|ram|memory|cpu|battery)\b", re.I),
@@ -90,8 +90,9 @@ AGENT_PATTERNS = [
     r"run\s+this\s+(file|script|code)",
     r"open\s+terminal\s+here",
     # Order/shop/book — requires web UI interaction
-    r"\b(order|book|buy|purchase|shop for)\b.+\b(online|from|on|at)\b",
-    r"\b(order|book|buy|purchase)\b.+\b(pizza|food|ticket|flight|hotel|uber|lyft)\b",
+    # Exclude "remind me to buy X at Y" (that's a reminder, not shopping)
+    r"(?<!remind me to )(?<!reminder to )\b(order|book|buy|purchase|shop for)\b.+\b(online|from|on|at)\b",
+    r"(?<!remind me to )\b(order|book|buy|purchase)\b.+\b(pizza|food|ticket|flight|hotel|uber|lyft)\b",
 ]
 
 # Direct tool patterns -- skip mode classification entirely for unambiguous requests
@@ -147,16 +148,18 @@ def classify_mode(user_input, quick_chat_fn=None):
 
     # ---- COMPOUND ACTION PRE-CHECK: "X and Y" where Y is an action → agent ----
     # Must run BEFORE direct tool patterns, which would match only the first part
-    if re.search(r'\band\s+(?:then\s+)?(?:send|email|post|upload|save|share|book|order|buy|play|search|open|go|navigate|click|type|fill|create|make|write|download|install|take|capture|paste|compose|reply|forward)\b', lower):
+    if re.search(r'\band\s+(?:then\s+)?(?:send|email|post|upload|save|share|book|order|buy|play|search|open|go|navigate|click|type|fill|create|make|write|download|install|take|capture|paste|compose|reply|forward|calculate|check|browse|watch|listen|read|run|start|launch|close|delete|move|copy|rename)\b', lower):
         # Confirm it's truly compound (has a preceding action/object, not just "and open X")
         if re.search(r'(?:^|\s)(?:\w+\s+){2,}and\s+', lower):
             logger.info("Agent mode: compound action detected (X and Y)")
             return _finish(ModeDecision("agent", 0.9, "compound action: X and Y"))
 
     # ---- APP-SPECIFIC INTERACTIONS: "X on/in <app>" or "search <site> for Y" ----
-    if re.search(r'\b(?:send|compose|write|post)\s+.+\b(?:on|in|via|using|through)\s+(?:whatsapp|telegram|slack|discord|messenger|teams)\b', lower):
-        return _finish(ModeDecision("agent", 0.9, "messaging app interaction"))
-    if re.search(r'\bsearch\s+(?:amazon|ebay|flipkart|walmart|etsy|aliexpress)\b.+\bfor\b', lower):
+    if re.search(r'\b(?:send|compose|write|post)\s+.+\b(?:on|in|via|using|through)\s+(?:whatsapp|telegram|slack|discord|messenger|teams|twitter|instagram|facebook|reddit)\b', lower):
+        return _finish(ModeDecision("agent", 0.9, "messaging/social app interaction"))
+    if re.search(r'\bsearch\s+(?:for\s+)?(?:.+\s+on\s+)?(?:amazon|ebay|flipkart|walmart|etsy|aliexpress)\b', lower):
+        return _finish(ModeDecision("agent", 0.9, "site-specific search"))
+    if re.search(r'\b(?:search|look)\s+(?:for\s+)?.+\s+on\s+(?:amazon|ebay|flipkart|walmart|etsy)\b', lower):
         return _finish(ModeDecision("agent", 0.9, "site-specific search"))
 
     # ---- PRE-CLASSIFICATION: direct tool pattern match (fastest) ----
@@ -187,6 +190,9 @@ def classify_mode(user_input, quick_chat_fn=None):
                 r"explain .+ in detail\b",
                 r"\bhistory of\b", r"\bevolution of\b",
                 r"search for .+(history|overview|guide|tutorial)\b",
+                # Knowledge questions needing multi-source research
+                r"^what (?:is|are) (?!the (?:time|date|weather|temperature|forecast))\w.{8,}",
+                r"^(?:how|why) (?:does|do|is|are|did|can|could|would|should) .{10,}",
             ]
             for pattern in research_triggers:
                 if re.search(pattern, lower):
