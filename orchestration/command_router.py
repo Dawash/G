@@ -45,7 +45,15 @@ def detect_meta_command(text):
             return cmd
     m = _CORRECTION_RE.search(t)
     if m:
-        return ("correction", m.group(1).strip())
+        corrected = m.group(1).strip()
+        # Persist correction for speech learning
+        try:
+            from memory import MemoryStore
+            _mem = MemoryStore()
+            _mem.remember("speech_corrections", corrected.lower(), t)
+        except Exception:
+            pass
+        return ("correction", corrected)
     return None
 
 

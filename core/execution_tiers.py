@@ -53,6 +53,7 @@ TOOL_TIER_MAP: dict[str, ExecutionTier] = {
     "web_search_answer":    ExecutionTier.DETERMINISTIC,
     "google_search":        ExecutionTier.DETERMINISTIC,
     "read_clipboard":       ExecutionTier.DETERMINISTIC,
+    "write_clipboard":      ExecutionTier.DETERMINISTIC,
     "memory_control":       ExecutionTier.DETERMINISTIC,
     "get_calendar":         ExecutionTier.DETERMINISTIC,
     "run_self_test":        ExecutionTier.DETERMINISTIC,

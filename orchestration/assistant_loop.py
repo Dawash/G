@@ -664,8 +664,8 @@ def run(runtime_state=None):
                 from orchestration.feedback import get_feedback
                 get_feedback().record_success(
                     _fp_result.handler_key or "multi_step", "fast_path", _fp_elapsed)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Non-critical: {type(e).__name__}: {e}")
             continue
 
         # Also try single-command match for error recovery path
@@ -705,7 +705,17 @@ def run(runtime_state=None):
         if is_connected and _brain_available and not _api_limited() and not brain.key_is_dead:
             logging.info(f"Brain processing: '{user_input}'")
 
-            _BRAIN_TIMEOUT = 30  # seconds — allows 2-round tool calling (12s LLM + 2s tool + 12s response)
+            # Scale timeout by model size — 32b needs 40s per LLM round
+            _model_name = getattr(brain, 'ollama_model', '') or ''
+            _model_lower = _model_name.lower()
+            if any(s in _model_lower for s in ("72b", "70b")):
+                _BRAIN_TIMEOUT = 300
+            elif any(s in _model_lower for s in ("32b", "34b", "27b")):
+                _BRAIN_TIMEOUT = 180
+            elif any(s in _model_lower for s in ("14b", "13b")):
+                _BRAIN_TIMEOUT = 90
+            else:
+                _BRAIN_TIMEOUT = 60  # 7b and smaller
             # Dynamic acknowledgment: longer delay for simple queries (likely fast), shorter for complex
             _ack_delay = 4.0 if len(user_input.split()) <= 5 else 2.5
             _ack_timer = threading.Timer(_ack_delay, lambda: speak_async("Working on it..."))
@@ -749,7 +759,7 @@ def run(runtime_state=None):
             finally:
                 _ack_timer.cancel()
 
-            if response:
+            if response and str(response).strip():
                 _ss.last_response = str(response)
                 if "__RESTART__" in str(response):
                     _say(ainame, _llm_response(brain, "assistant is about to restart, say a quick goodbye",

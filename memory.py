@@ -258,6 +258,18 @@ class MemoryStore:
         except OSError:
             return 0.0
 
+    def record_app_status(self, app_name, installed, exe_path=""):
+        """Remember whether an app is installed on this system."""
+        value = f"{'installed' if installed else 'not_found'}|{exe_path}"
+        self.remember("app_inventory", app_name.lower().strip(), value)
+
+    def get_app_status(self, app_name):
+        """Check if we know whether an app is installed. Returns True/False/None."""
+        val = self.recall("app_inventory", app_name.lower().strip())
+        if val is None:
+            return None
+        return val.startswith("installed")
+
     def close(self):
         with self._lock:
             self._conn.close()

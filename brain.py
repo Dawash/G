@@ -492,8 +492,8 @@ def _log_learning(user_input, tool_name, arguments, result):
             ])
             cog.log_outcome(user_input, tool_name, arguments, is_success, result_str)
             return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Non-critical: {type(e).__name__}: {e}")
     # Fallback: use raw ExperienceLearner
     if _brain_state.experience_learner:
         try:
@@ -503,8 +503,8 @@ def _log_learning(user_input, tool_name, arguments, result):
                 "permission denied", "could not", "couldn't",
             ])
             _brain_state.experience_learner.log_outcome(user_input, tool_name, arguments, is_success, result_str)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Non-critical: {type(e).__name__}: {e}")
 
 
 def execute_tool(tool_name, arguments, action_registry, reminder_mgr=None, speak_fn=None):
@@ -526,6 +526,8 @@ def execute_tool(tool_name, arguments, action_registry, reminder_mgr=None, speak
     tool_name = _validate_tool_choice(tool_name, user_input)
 
     logger.info(f"execute_tool called: {tool_name}({arguments})")
+    if action_registry is None:
+        action_registry = {}
     execute_tool._action_registry = action_registry  # For agent escalation
 
     # --- Phase 8: Contract validation (catches hallucinated args) ---
@@ -552,8 +554,8 @@ def execute_tool(tool_name, arguments, action_registry, reminder_mgr=None, speak
                     logger.info(f"Cognitive: low confidence ({confidence:.0%}) for {tool_name}, "
                                 f"switching to {alt['tool']} ({alt['reason']})")
                     tool_name = alt["tool"]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Non-critical: {type(e).__name__}: {e}")
 
     # --- ANSWER CHECK: tool blacklist (EasyTool pattern) ---
     # If this tool was already blacklisted for the current request, try alternative
@@ -596,6 +598,19 @@ def execute_tool(tool_name, arguments, action_registry, reminder_mgr=None, speak
             path_match = _re.search(r'Created file: (.+)', str(result))
             if path_match:
                 _brain_state.last_created_file = path_match.group(1).strip()
+
+        # Record app availability for future learning
+        if tool_name == "open_app" and result:
+            app_name = arguments.get("name", "")
+            try:
+                from memory import MemoryStore
+                _m = MemoryStore()
+                if "not found" in str(result).lower():
+                    _m.record_app_status(app_name, False)
+                else:
+                    _m.record_app_status(app_name, True)
+            except Exception:
+                pass
 
         # Failure recovery: suggest similar apps if "not found"
         if tool_name == "open_app" and result and "not found" in str(result).lower():
@@ -672,6 +687,19 @@ def execute_tool(tool_name, arguments, action_registry, reminder_mgr=None, speak
 
     # Log outcome for cognitive learning
     _log_learning(user_input, tool_name, arguments, result)
+
+    # Record app availability for future learning
+    if tool_name == "open_app" and result:
+        app_name = arguments.get("name", "")
+        try:
+            from memory import MemoryStore
+            _m = MemoryStore()
+            if "not found" in str(result).lower():
+                _m.record_app_status(app_name, False)
+            else:
+                _m.record_app_status(app_name, True)
+        except Exception:
+            pass
 
     # Failure recovery: suggest similar apps if "not found" (Phase 9)
     if tool_name == "open_app" and result and "not found" in str(result).lower():
@@ -948,6 +976,17 @@ def _execute_tool_inner(tool_name, arguments, action_registry, reminder_mgr=None
             except Exception as e:
                 return f"Could not read clipboard: {e}"
 
+        elif tool_name == "write_clipboard":
+            text = arguments.get("text", "")
+            if not text:
+                return "No text provided to copy."
+            try:
+                import pyperclip
+                pyperclip.copy(text)
+                return f"Copied to clipboard ({len(text)} chars)."
+            except ImportError:
+                return "Clipboard not available (pyperclip not installed)."
+
         elif tool_name == "analyze_clipboard_image":
             try:
                 from PIL import ImageGrab
@@ -1076,8 +1115,11 @@ def _execute_tool_inner(tool_name, arguments, action_registry, reminder_mgr=None
                 # Open settings page directly first
                 if "open_app" in action_registry:
                     action_registry["open_app"](setting)
-                    import time as _time
-                    _time.sleep(2)  # Wait for settings to load
+                    try:
+                        from automation.event_waiter import wait_for_window
+                        wait_for_window(setting, max_wait=2, interval=0.2)
+                    except (ImportError, Exception):
+                        time.sleep(1)  # Reduced from 2s
 
             from desktop_agent import DesktopAgent
             from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
@@ -2303,8 +2345,8 @@ class Brain:
                 if resolved != user_input:
                     logger.info(f"Cognitive resolved: '{user_input}' → '{resolved}'")
                     user_input = resolved
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Non-critical: {type(e).__name__}: {e}")
 
         # Detect one-shot language override: "say X in Hindi", "greet in Nepali"
         # User is speaking ENGLISH but wants OUTPUT in another language

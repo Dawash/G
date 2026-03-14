@@ -49,12 +49,14 @@ TOOL_SAFETY_LEVELS = {
     "web_read": SAFE,
     "web_search_answer": SAFE,
     "read_clipboard": SAFE,
+    "write_clipboard": SAFE,
     "analyze_clipboard_image": SAFE,
 
     # --- Moderate: mild side effects, optional confirmation ---
     "open_app": MODERATE,
     "close_app": MODERATE,
     "minimize_app": MODERATE,
+    "snap_window": MODERATE,
     "google_search": MODERATE,
     "set_reminder": MODERATE,
     "manage_alarm": MODERATE,

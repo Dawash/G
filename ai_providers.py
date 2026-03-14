@@ -62,7 +62,13 @@ def check_ollama_health(force=False, ollama_url=None):
     if not force and not _provider_state.should_check_ollama():
         with _provider_state._lock:
             return _provider_state.ollama_available
-    available = OllamaProvider.is_available(ollama_url=ollama_url)
+    try:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _pool:
+            _fut = _pool.submit(OllamaProvider.is_available, ollama_url)
+            available = _fut.result(timeout=5)
+    except (concurrent.futures.TimeoutError, Exception):
+        available = False
     _provider_state.set_ollama_status(available)
     return available
 

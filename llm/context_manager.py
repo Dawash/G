@@ -101,6 +101,12 @@ class ContextManager:
 
         Always starts on a user message to avoid orphaned assistant messages.
         """
+        # Truncate oversized individual messages (code dumps, pasted text)
+        _MAX_MSG_LEN = 4000
+        for msg in self.messages:
+            if isinstance(msg, dict) and msg.get("content") and len(str(msg["content"])) > _MAX_MSG_LEN:
+                msg["content"] = str(msg["content"])[:_MAX_MSG_LEN] + "...[truncated]"
+
         if len(self.messages) <= self.max_context:
             return
         old_count = len(self.messages) - self.max_context

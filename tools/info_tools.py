@@ -69,6 +69,21 @@ def _handle_read_clipboard(arguments):
         return f"Could not read clipboard: {e}"
 
 
+def _handle_write_clipboard(arguments):
+    """Write text to the clipboard."""
+    text = arguments.get("text", "")
+    if not text:
+        return "No text provided to copy."
+    try:
+        import pyperclip
+        pyperclip.copy(text)
+        return f"Copied to clipboard ({len(text)} chars)."
+    except ImportError:
+        return "Clipboard not available (pyperclip not installed)."
+    except Exception as e:
+        return f"Could not write to clipboard: {e}"
+
+
 def _handle_analyze_clipboard_image(arguments):
     """Analyze an image from clipboard using vision (llava)."""
     try:
@@ -356,6 +371,30 @@ def register_info_tools(registry: ToolRegistry):
     ))
 
     registry.register(ToolSpec(
+        name="write_clipboard",
+        description=(
+            "Copy text to the clipboard. Use when user says 'copy this', 'put this in my clipboard', "
+            "'save this to clipboard', or when user asks you to generate text and copy it. "
+            "Also use after generating code, summaries, or formatted text the user wants to paste."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "The text to copy to the clipboard"
+                }
+            },
+            "required": ["text"]
+        },
+        handler=_handle_write_clipboard,
+        aliases=["copy_to_clipboard", "set_clipboard", "clipboard_write", "copy_text",
+                 "write_clip", "copy"],
+        primary_arg="text",
+        core=False,  # Cloud-only: clipboard ops are secondary
+    ))
+
+    registry.register(ToolSpec(
         name="analyze_clipboard_image",
         description=(
             "Analyze an image from the clipboard using vision. Use when user says "
@@ -379,4 +418,4 @@ def register_info_tools(registry: ToolRegistry):
         core=False,  # Cloud-only: specialized, rarely used
     ))
 
-    logger.info(f"Registered 9 info tools")
+    logger.info(f"Registered 10 info tools")

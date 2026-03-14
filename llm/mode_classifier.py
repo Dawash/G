@@ -213,5 +213,19 @@ def classify_mode(user_input, quick_chat_fn=None):
         except Exception:
             pass
 
+    # ---- FUZZY KEYWORD MATCHING: catch common speech-to-text typos ----
+    from difflib import SequenceMatcher
+    _words = lower.split()
+    _AGENT_KEYWORDS = ["autonomous", "automate", "automatic", "agent"]
+    _RESEARCH_KEYWORDS = ["research", "investigate", "analyze", "study"]
+    for word in _words:
+        if len(word) >= 5:  # Only fuzzy-match longer words
+            for kw in _AGENT_KEYWORDS:
+                if SequenceMatcher(None, word, kw).ratio() > 0.80:
+                    return _finish(ModeDecision("agent", 0.85, f"fuzzy match: {word}→{kw}"))
+            for kw in _RESEARCH_KEYWORDS:
+                if SequenceMatcher(None, word, kw).ratio() > 0.80:
+                    return _finish(ModeDecision("research", 0.85, f"fuzzy match: {word}→{kw}"))
+
     # ---- DEFAULT: quick mode ----
     return _finish(ModeDecision("quick", 0.5, "default quick mode"))

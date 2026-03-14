@@ -385,6 +385,21 @@ def _build_default_contracts() -> ContractRegistry:
         allowed_tiers=[ExecutionTier.DETERMINISTIC],
     ))
 
+    reg.register(ToolContract(
+        name="write_clipboard",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Text to copy to clipboard"},
+            },
+            "required": ["text"],
+        },
+        side_effect_level=SIDE_EFFECT_LOCAL,
+        timeout=5,
+        idempotent=True,
+        allowed_tiers=[ExecutionTier.DETERMINISTIC],
+    ))
+
     # --- Tier 1: STRUCTURED_AUTOMATION ---
 
     reg.register(ToolContract(
@@ -429,6 +444,26 @@ def _build_default_contracts() -> ContractRegistry:
         },
         side_effect_level=SIDE_EFFECT_SYSTEM,
         timeout=5,
+        idempotent=True,
+        allowed_tiers=[ExecutionTier.STRUCTURED, ExecutionTier.ADAPTIVE],
+    ))
+
+    reg.register(ToolContract(
+        name="snap_window",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Window title or app name"},
+                "position": {"type": "string", "description": "Where to snap the window",
+                             "enum": ["left", "right", "maximize", "minimize",
+                                      "center", "restore",
+                                      "top-left", "top-right",
+                                      "bottom-left", "bottom-right"]},
+            },
+            "required": ["name", "position"],
+        },
+        side_effect_level=SIDE_EFFECT_SYSTEM,
+        timeout=10,
         idempotent=True,
         allowed_tiers=[ExecutionTier.STRUCTURED, ExecutionTier.ADAPTIVE],
     ))
