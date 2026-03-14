@@ -149,8 +149,15 @@ def startup_greeting(config, reminder_mgr, speak_fn, speak_async_fn):
         try:
             from news import get_headlines
             headlines = get_headlines("general", count=5)
-            if headlines:
-                news_result[0] = headlines[:5]
+            if not headlines:
+                return
+            # Summarize via LLM inside the parallel thread (no extra delay)
+            summary = _summarize_news(headlines[:5])
+            if summary:
+                news_result[0] = summary
+            else:
+                # Fallback: join top 3 headlines
+                news_result[0] = "In the news: " + ". ".join(headlines[:3]) + "."
         except Exception:
             pass
 
@@ -163,7 +170,7 @@ def startup_greeting(config, reminder_mgr, speak_fn, speak_async_fn):
         ]
         for future in futures:
             try:
-                future.result(timeout=4)
+                future.result(timeout=8)  # Allow time for LLM news summary
             except Exception:
                 pass
 
@@ -194,9 +201,9 @@ def startup_greeting(config, reminder_mgr, speak_fn, speak_async_fn):
     if active:
         console_extra.append(f"  Active reminders: {len(active)}")
 
-    # News — spoken (top 3 headlines, no LLM summarization to keep it fast)
+    # News — spoken (LLM-summarized, runs in parallel so no extra delay)
     if news_result[0]:
-        spoken.insert(-1, "In the news: " + ". ".join(news_result[0][:3]) + ".")
+        spoken.insert(-1, news_result[0])
 
     # Habit suggestions — console only
     try:
