@@ -194,9 +194,9 @@ def startup_greeting(config, reminder_mgr, speak_fn, speak_async_fn):
     if active:
         console_extra.append(f"  Active reminders: {len(active)}")
 
-    # News — console only (no LLM call, no speaking)
+    # News — spoken (top 3 headlines, no LLM summarization to keep it fast)
     if news_result[0]:
-        console_extra.append("  News: " + " | ".join(news_result[0][:3]))
+        spoken.insert(-1, "In the news: " + ". ".join(news_result[0][:3]) + ".")
 
     # Habit suggestions — console only
     try:
