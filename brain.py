@@ -29,7 +29,6 @@ import time
 import threading
 import requests
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
 
 # Cached MemoryStore singleton — avoids leaking SQLite connections
 _memory_store_cache = None
@@ -59,7 +58,6 @@ from brain_defs import (
 )
 
 # Extracted modules (Phase 4)
-from llm.mode_classifier import classify_mode as _classify_mode_fn
 from llm.response_builder import (
     sanitize_response as _sanitize_response_fn,
     is_llm_refusal as _is_llm_refusal_fn,
@@ -69,7 +67,6 @@ from llm.brain_service import BrainService as _BrainService
 from llm.prompt_builder import (
     build_prompt_system as _build_prompt_system,
     build_brain_system_prompt as _build_brain_system_prompt,
-    load_test_feedback_hints as _load_test_feedback_hints,
 )
 from tools.safety_policy import (
     CONFIRM_TOOLS as _CONFIRM_TOOLS,
@@ -351,11 +348,6 @@ def log_action(module, action, result, success=True):
     """Log an action to the shared action log."""
     _brain_state.log_action(module, action, str(result)[:300], success)
 
-
-def get_action_history(limit=20):
-    """Get recent action history."""
-    with _brain_state._lock:
-        return list(_brain_state.action_log[-limit:])
 
 # Models known to support native tool calling in Ollama
 TOOL_CAPABLE_MODELS = {
@@ -2188,10 +2180,6 @@ class Brain:
     # Topic tracking (Phase 7)
     # ------------------------------------------------------------------
 
-    def _extract_topic(self, text):
-        """Extract topic from user text using keyword matching."""
-        return self._ctx.extract_topic(text)
-
     def _update_topic(self, user_input):
         """Update topic tracking and adjust context window size."""
         self._ctx.update_topic(user_input)
@@ -2636,10 +2624,6 @@ class Brain:
 
     # Mode classification: patterns and logic in llm/mode_classifier.py
 
-    def _classify_mode(self, user_input):
-        """Delegate to llm.mode_classifier.classify_mode()."""
-        return _classify_mode_fn(user_input, quick_chat_fn=self.quick_chat)
-
     def _run_agent_mode(self, user_input):
         """Run autonomous agent. Tries CLI/API strategies first, then desktop agent.
 
@@ -2754,18 +2738,6 @@ class Brain:
                 _json.dump(self.last_call_trace, f, indent=2, default=str)
         except Exception:
             pass  # Non-critical — don't break Brain on trace write failure
-
-    def _record_trace_tool(self, tool_name, tool_args, result=None):
-        """Record a tool call in the current trace."""
-        if not self.last_call_trace:
-            return
-        self.last_call_trace["tool_calls"].append({
-            "tool": tool_name, "args": tool_args,
-        })
-        if result is not None:
-            self.last_call_trace["tool_results"].append(
-                str(result)[:300]
-            )
 
     @staticmethod
     def _sanitize_response(text):

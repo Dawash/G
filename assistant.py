@@ -58,9 +58,3 @@ def run():
     _loop_run(runtime_state=_runtime_state)
 
 
-# --- Backward-compatibility re-exports ---
-# interactive_test.py imports: _build_action_map, _llm_response, startup_greeting
-
-from orchestration.fallback_router import build_action_map as _build_action_map
-from orchestration.response_dispatcher import llm_response as _llm_response
-from orchestration.session_manager import startup_greeting
