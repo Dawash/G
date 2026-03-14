@@ -91,7 +91,7 @@ from core.failure_journal import get_default_journal as _get_failure_journal, cl
 logger = logging.getLogger(__name__)
 
 # Max tool-call rounds before forcing a text response
-MAX_TOOL_ROUNDS = 3
+MAX_TOOL_ROUNDS = 20
 
 # --- Pre-compiled patterns for hot paths in think() ---
 _LANG_CODES = {
@@ -1164,12 +1164,26 @@ def _auto_escalate_to_agent(tool_name, arguments, what_done, what_missing, user_
 
     # Build specific agentic goal
     if tool_name in ("play_music", "search_in_app") and query and app:
-        goal = (
-            f"{app} is already open on screen. "
-            f"Search for '{query}' in {app} and play it. "
-            f"Look for the search bar, type '{query}', press Enter, "
-            f"then click the first result to play it."
-        )
+        if app.lower() == "spotify":
+            goal = (
+                f"Spotify is open with search results for '{query}'. "
+                f"Click the FIRST song/playlist result to start playing it. "
+                f"If nothing plays, try: 1) click the first item in the results list, "
+                f"2) double-click it, 3) press Enter. "
+                f"The goal is COMPLETE only when music is actually playing."
+            )
+        elif app.lower() == "youtube":
+            goal = (
+                f"YouTube search results for '{query}' are showing in the browser. "
+                f"Click the FIRST video thumbnail or title to play it. "
+                f"The goal is COMPLETE only when a video is playing (URL contains /watch)."
+            )
+        else:
+            goal = (
+                f"{app} is already open on screen. "
+                f"Search for '{query}' in {app} and play/open it. "
+                f"Click the first result to select it."
+            )
     elif tool_name == "google_search" and query:
         goal = (
             f"A browser is already open. Navigate to Google and search for '{query}'. "
@@ -2398,7 +2412,7 @@ class Brain:
             _PARTIAL_INDICATORS = [
                 "not confirmed", "couldn't auto-play", "click a result",
                 "try clicking", "but couldn't", "but playback",
-                "couldn't auto-play", "searched for", "but couldn't",
+                "searched for", "couldn't click", "couldn't play",
             ]
             _is_partial = any(ind in result_lower for ind in _PARTIAL_INDICATORS)
 
@@ -2432,13 +2446,16 @@ class Brain:
             self.last_call_trace["elapsed"] = round(_time.time() - _trace_start, 2)
             self._write_trace()
 
-            # Save successful multi-tool sequences as skills (Voyager pattern)
+            # Save successful tool sequences as skills (Voyager pattern)
+            # Save both multi-tool AND single important tools (play_music, open_app)
             if result and self.last_call_trace.get("tool_calls"):
                 tool_calls_for_skill = self.last_call_trace["tool_calls"]
-                # Only save if multiple tools were used and no errors in result
-                if (len(tool_calls_for_skill) >= 2
-                        and not any(w in str(result).lower()
-                                    for w in ["error", "failed", "not found"])):
+                result_lower = str(result).lower()
+                has_error = any(w in result_lower for w in ["error", "failed", "not found", "couldn't"])
+                # Save multi-tool sequences, or single interactive tools that succeeded
+                _interactive_tools = {"play_music", "search_in_app", "agent_task", "google_search"}
+                is_interactive = any(tc.get("name") in _interactive_tools for tc in tool_calls_for_skill)
+                if not has_error and (len(tool_calls_for_skill) >= 2 or is_interactive):
                     try:
                         self._save_as_skill(user_input, tool_calls_for_skill)
                     except Exception as e:

@@ -64,10 +64,10 @@ PHASE_RECON = "RECON"
 PHASE_EXECUTE = "EXECUTE"
 PHASE_VERIFY = "VERIFY"
 MAX_RECON_TURNS = 3           # Max turns for reconnaissance phase
-MAX_EXECUTE_TURNS = 12        # Max turns for execution phase
+MAX_EXECUTE_TURNS = 999        # Max turns for execution phase
 CHECKPOINT_INTERVAL = 3       # Checkpoint every N actions
 MAX_BACKTRACK_ATTEMPTS = 2    # Max replans before giving up
-TAKEOVER_TIMEOUT = 120        # Seconds to wait for user on sensitive screens
+TAKEOVER_TIMEOUT = 3600        # Seconds to wait for user on sensitive screens
 
 # Takeover patterns — agent pauses for user on these screens
 _TAKEOVER_PATTERNS = [

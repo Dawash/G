@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # Max attempts per single step before giving up
 MAX_STEP_ATTEMPTS = 10
 # Max time for a single step (seconds)
-STEP_TIMEOUT = 300
+STEP_TIMEOUT = 3600
 
 
 class ExecutorAgent(BaseAgent):

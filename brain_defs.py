@@ -1017,8 +1017,12 @@ def _verify_tool_completion(tool_name, arguments, result, user_input=""):
         if action in ("pause", "next", "previous", "volume_up", "volume_down", "mute"):
             return True, [], []
         result_lower = str(result).lower()
-        if any(w in result_lower for w in ["playing", "searched for", "play first result", "pressed enter"]):
-            return True, ["music action performed"], []
+        # Only consider it fully complete if it says "Playing" (not "searched for" or "couldn't")
+        if "playing" in result_lower and "couldn't" not in result_lower:
+            return True, ["music playing"], []
+        # Partial: searched but couldn't play
+        if "couldn't auto-play" in result_lower or "click a result" in result_lower:
+            return False, ["searched"], ["click play"]
 
     app = ""
     query = ""

@@ -216,7 +216,7 @@ class OpenRouterProvider(ChatProvider):
                     *self.messages,
                 ],
             },
-            timeout=15,
+            timeout=120,
         )
         response.raise_for_status()
         data = response.json()
@@ -248,7 +248,7 @@ class OpenAIProvider(ChatProvider):
                     *self.messages,
                 ],
             },
-            timeout=15,
+            timeout=120,
         )
         response.raise_for_status()
         data = response.json()
@@ -280,7 +280,7 @@ class AnthropicProvider(ChatProvider):
                 "system": self.system_prompt,
                 "messages": self.messages,
             },
-            timeout=15,
+            timeout=120,
         )
         response.raise_for_status()
         data = response.json()

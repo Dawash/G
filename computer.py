@@ -235,86 +235,101 @@ def _is_app_running(app_name):
 
 
 def _click_first_spotify_song():
-    """Play the first song in Spotify search results via UIA accessibility tree.
+    """Play the first song/playlist in Spotify search results.
 
-    Strategy (most reliable first):
-    1. UIA: find ListItem/DataItem controls in Spotify and invoke the first song
-    2. Enter key: press Enter to play top search result
-    3. UIA click_control: find any clickable song element by name
+    Quick keyboard attempts only — NO fixed positions, NO vision.
+    If these fail, caller returns partial result which triggers the
+    existing auto-escalation → desktop agent (observe→think→act→verify).
     Returns True if playback started.
     """
-    try:
-        from automation.ui_control import (
-            focus_window, list_controls, click_control, find_control,
-        )
-    except ImportError:
-        logger.warning("UIA not available, falling back to keyboard")
-        return _click_first_spotify_song_keyboard()
+    pag = _get_pyautogui()
+    win = _force_focus_spotify()
+    if not win:
+        return False
+    time.sleep(0.5)
 
-    try:
-        # Focus Spotify window via UIA
-        focus_result = focus_window("Spotify")
-        if not focus_result or "not found" in str(focus_result).lower():
-            logger.warning("Spotify window not found via UIA")
-            return _click_first_spotify_song_keyboard()
-        time.sleep(0.5)
-
-        # Method 1: UIA — enumerate controls, find song list items
-        controls = list_controls(window="Spotify", max_depth=6, max_count=50)
-        if controls:
-            # Look for ListItem / DataItem / Custom controls that represent songs
-            song_types = {"ListItem", "DataItem", "Custom", "Button", "Text"}
-            song_controls = []
-            for c in controls:
-                ctype = c.get("type", "")
-                cname = c.get("name", "")
-                if not cname or len(cname) < 2:
-                    continue
-                # Skip non-song UI elements
-                skip_names = {"home", "search", "library", "premium", "install",
-                              "create playlist", "liked songs", "close", "minimize",
-                              "maximize", "spotify", "settings", "your library",
-                              "go back", "go forward", "now playing", "player controls"}
-                if cname.lower().strip() in skip_names:
-                    continue
-                if ctype in song_types and c.get("clickable", False):
-                    song_controls.append(c)
-
-            if song_controls:
-                # Click the first song-like control
-                target = song_controls[0]
-                logger.info(f"Spotify UIA: clicking '{target['name']}' ({target['type']})")
-                result = click_control(name=target["name"], window="Spotify")
-                if result and "not found" not in str(result).lower():
-                    time.sleep(2)
-                    if _check_spotify_playing():
-                        logger.info(f"Spotify UIA click succeeded: {target['name']}")
-                        return True
-                    # Try double-click (Spotify sometimes needs it)
-                    click_control(name=target["name"], window="Spotify")
-                    time.sleep(2)
-                    return True
-
-        # Method 2: Enter key (works when search bar has focus with results shown)
-        logger.info("Spotify UIA: no song controls found, trying Enter key")
-        pag = _get_pyautogui()
-        pag.press("enter")
-        time.sleep(2.5)
+    # Try 3 keyboard strategies — each verified before moving on
+    strategies = [
+        ("Tab→Enter", ["tab", "enter"]),
+        ("Down→Enter", ["down", "enter"]),
+        ("Tab×3→Enter", ["tab", "tab", "tab", "enter"]),
+    ]
+    for name, keys in strategies:
+        _force_focus_spotify()
+        time.sleep(0.3)
+        logger.info(f"Spotify: keyboard — {name}")
+        for key in keys:
+            pag.press(key)
+            time.sleep(0.2)
+        time.sleep(3)
         if _check_spotify_playing():
-            logger.info("Spotify: Enter key worked")
+            logger.info(f"Spotify: {name} worked — playing")
             return True
 
-        # Method 3: Tab + Enter (navigate from search to first result)
-        logger.info("Spotify: trying Tab+Enter")
-        pag.press("tab")
-        time.sleep(0.3)
-        pag.press("enter")
+    # Last resort: media Play key (plays whatever is queued)
+    try:
+        from brain_defs import _press_media_key, VK_MEDIA_PLAY_PAUSE
+        _press_media_key(VK_MEDIA_PLAY_PAUSE)
         time.sleep(2)
-        return True
+        if _check_spotify_playing():
+            logger.info("Spotify: media Play key worked")
+            return True
+    except Exception:
+        pass
 
-    except Exception as e:
-        logger.warning(f"_click_first_spotify_song UIA failed: {e}")
-        return _click_first_spotify_song_keyboard()
+    # Return False → caller returns "couldn't auto-play" →
+    # brain.py auto-escalation → desktop agent handles it
+    logger.info("Spotify: keyboard methods failed, will escalate to agent mode")
+    return False
+
+
+def _force_focus_window(title_substr):
+    """Force a window to foreground using Win32 AttachThreadInput trick.
+
+    Windows blocks SetForegroundWindow from background processes.
+    Workaround: attach to the target window's thread input, then set foreground.
+    Returns the pygetwindow window object, or None.
+    """
+    try:
+        import pygetwindow as gw
+        wins = [w for w in gw.getAllWindows()
+                if w.title and title_substr.lower() in w.title.lower()]
+        if not wins:
+            return None
+        win = wins[0]
+        if win.isMinimized:
+            win.restore()
+            time.sleep(0.5)
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            hwnd = win._hWnd
+            # Get thread IDs
+            current_thread = user32.GetCurrentThreadId()
+            target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+            # Attach input threads so SetForegroundWindow works
+            if current_thread != target_thread:
+                user32.AttachThreadInput(current_thread, target_thread, True)
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+            # Detach
+            if current_thread != target_thread:
+                user32.AttachThreadInput(current_thread, target_thread, False)
+        except Exception:
+            try:
+                win.activate()
+            except Exception:
+                pass
+        return win
+    except Exception:
+        return None
+
+
+def _force_focus_spotify():
+    """Force Spotify window to foreground."""
+    return _force_focus_window("spotify")
 
 
 def _spotify_no_results():
@@ -347,34 +362,8 @@ def _spotify_no_results():
 
 
 def _click_first_spotify_song_keyboard():
-    """Keyboard-only fallback for Spotify song selection."""
-    try:
-        pag = _get_pyautogui()
-        import pygetwindow as gw
-        wins = [w for w in gw.getAllWindows() if w.title and "spotify" in w.title.lower()]
-        if not wins:
-            return False
-        win = wins[0]
-        if win.isMinimized:
-            win.restore()
-            time.sleep(0.5)
-        try:
-            win.activate()
-        except Exception:
-            pass
-        time.sleep(0.5)
-        pag.press("enter")
-        time.sleep(2.5)
-        if _check_spotify_playing():
-            return True
-        pag.press("tab")
-        time.sleep(0.3)
-        pag.press("enter")
-        time.sleep(1.5)
-        return True
-    except Exception as e:
-        logger.warning(f"_click_first_spotify_song_keyboard failed: {e}")
-        return False
+    """Keyboard-only fallback for Spotify song selection (deprecated, kept for compat)."""
+    return _click_first_spotify_song()
 
 
 def _check_spotify_playing():
@@ -392,15 +381,16 @@ def _check_spotify_playing():
 
 
 def _click_first_youtube_video():
-    """Click the first real video in YouTube search results via CDP browser automation.
+    """Click the first real video in YouTube search results.
 
-    Strategy (most reliable first):
-    1. CDP: JavaScript click on first non-ad video title link
-    2. browser_driver.browser_click: text-based click via CDP
-    3. CDP navigation: extract video URL and navigate directly
+    Multi-strategy with retries:
+    1. CDP JS: click first non-ad video (retried up to 3 times with wait)
+    2. CDP extract + navigate: get video URL and navigate directly
+    3. CDP browser_click: text-based click via page snapshot
+    4. Keyboard: Tab to first video link and press Enter
     Returns True if click succeeded.
     """
-    # Strategy 1: Use browser_driver CDP (the proper web automation layer)
+    # ---- CDP Strategies (most reliable for web) ----
     try:
         from automation.browser_driver import (
             is_cdp_available, browser_click, browser_get_url,
@@ -408,7 +398,6 @@ def _click_first_youtube_video():
         )
 
         if not _check_cdp():
-            # Try to enable CDP by launching Chrome with debug port
             try:
                 from automation.cdp_session import CDPSession
                 cdp = CDPSession()
@@ -420,7 +409,7 @@ def _click_first_youtube_video():
         if _check_cdp():
             ws = _get_active_tab_ws()
             if ws:
-                # JS: find first non-ad video and click it
+                # JS to click first non-ad video
                 js_click = """
                 (() => {
                     // Strategy A: click first non-ad video title link
@@ -428,7 +417,6 @@ def _click_first_youtube_video():
                         'ytd-video-renderer, ytd-rich-item-renderer'
                     );
                     for (const r of renderers) {
-                        // Skip ad results
                         if (r.querySelector('[class*="ad-badge"]') ||
                             r.querySelector('ytd-ad-slot-renderer') ||
                             r.closest('ytd-ad-slot-renderer')) continue;
@@ -447,38 +435,50 @@ def _click_first_youtube_video():
                         }
                     }
                     // Strategy C: extract first video URL for direct navigation
-                    const anyLink = document.querySelector('a[href*="/watch"]');
-                    if (anyLink) return 'url:' + anyLink.href;
+                    const links = document.querySelectorAll('a[href*="/watch"]');
+                    for (const l of links) {
+                        if (!l.closest('ytd-ad-slot-renderer') && l.href) {
+                            return 'url:' + l.href;
+                        }
+                    }
                     return 'no videos found';
                 })()
                 """
-                result = _send_cdp_command(
-                    ws, "Runtime.evaluate",
-                    {"expression": js_click, "returnByValue": True}
-                )
-                if result:
-                    value = str(result.get("result", {}).get("value", ""))
-                    if "clicked" in value.lower():
-                        logger.info(f"YouTube CDP click: {value}")
-                        time.sleep(2)
-                        # Verify we navigated to a /watch page
-                        try:
-                            url = browser_get_url()
-                            if url and "/watch" in url:
-                                return True
-                        except Exception:
-                            pass
-                        return True
-                    elif value.startswith("url:"):
-                        # Direct navigation to extracted video URL
-                        video_url = value[4:]
-                        logger.info(f"YouTube CDP: navigating to {video_url}")
-                        nav_result = _send_cdp_command(
-                            ws, "Page.navigate", {"url": video_url}
-                        )
-                        if nav_result:
-                            time.sleep(2)
+
+                # Retry CDP click up to 3 times (page may still be loading)
+                for attempt in range(3):
+                    result = _send_cdp_command(
+                        ws, "Runtime.evaluate",
+                        {"expression": js_click, "returnByValue": True}
+                    )
+                    if result:
+                        value = str(result.get("result", {}).get("value", ""))
+                        if "clicked" in value.lower():
+                            logger.info(f"YouTube CDP click (attempt {attempt+1}): {value}")
+                            time.sleep(3)
+                            try:
+                                url = browser_get_url()
+                                if url and "/watch" in url:
+                                    return True
+                            except Exception:
+                                pass
                             return True
+                        elif value.startswith("url:"):
+                            # Direct navigation to extracted video URL
+                            video_url = value[4:]
+                            logger.info(f"YouTube CDP: navigating to {video_url}")
+                            _send_cdp_command(ws, "Page.navigate", {"url": video_url})
+                            time.sleep(3)
+                            return True
+                        elif "no videos found" in value:
+                            if attempt < 2:
+                                logger.info(f"YouTube: no videos found yet, waiting (attempt {attempt+1})")
+                                time.sleep(3)
+                                continue
+                    else:
+                        if attempt < 2:
+                            time.sleep(2)
+                            continue
 
                 # Strategy 2: browser_click with video title text from page snapshot
                 try:
@@ -494,7 +494,7 @@ def _click_first_youtube_video():
                                     logger.info(f"YouTube: browser_click on '{text}' succeeded")
                                     time.sleep(2)
                                     return True
-                                break  # Only try first video
+                                break
                 except Exception as e:
                     logger.debug(f"YouTube browser_click fallback failed: {e}")
 
@@ -503,45 +503,12 @@ def _click_first_youtube_video():
     except Exception as e:
         logger.warning(f"YouTube CDP automation failed: {e}")
 
-    # Strategy 3: Keyboard fallback (focus browser, Tab to first video, Enter)
-    logger.info("YouTube: CDP not available, using keyboard fallback")
-    try:
-        pag = _get_pyautogui()
-        import pygetwindow as gw
-        win = None
-        for w in gw.getAllWindows():
-            if w.title and ("youtube" in w.title.lower() or
-                           any(b in w.title.lower() for b in ["chrome", "firefox", "edge", "brave"])):
-                win = w
-                break
-        if not win:
-            return False
-        if win.isMinimized:
-            win.restore()
-            time.sleep(0.5)
-        try:
-            win.activate()
-        except Exception:
-            pass
-        time.sleep(0.5)
-
-        # Tab through elements to find video links, then Enter
-        for i in range(12):
-            pag.press("tab")
-            time.sleep(0.1)
-        pag.press("enter")
-        time.sleep(2.5)
-        # Check if title changed (video pages have " - YouTube" without "search_query")
-        try:
-            fresh = gw.getActiveWindow()
-            if fresh and fresh.title and "youtube" in fresh.title.lower():
-                return True
-        except Exception:
-            pass
-        return False
-    except Exception as e:
-        logger.warning(f"YouTube keyboard fallback failed: {e}")
-        return False
+    # ---- Non-CDP Fallback ----
+    # Return False → caller returns "couldn't auto-play" →
+    # brain.py auto-escalation → desktop agent handles it with
+    # its full observe→think→act→verify loop
+    logger.info("YouTube: CDP unavailable, will escalate to agent mode")
+    return False
 
 
 def search_in_app(app_name, query):

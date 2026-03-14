@@ -107,109 +107,76 @@ def play_music(action, query=None, app="spotify", last_user_input="", quick_chat
                 query = "Today's Top Hits" if q_lower in _VAGUE_MUSIC else f"best {q_base} songs"
 
     if action in ("play", "play_query") and query:
+        # Start PopupGuardian to auto-dismiss popups during media playback
+        _guardian = None
+        try:
+            from agents.popup_guardian import PopupGuardian
+            _guardian = PopupGuardian(goal=f"play {query} on {app}")
+            _guardian.start()
+        except Exception:
+            pass
+
         if app == "spotify":
-            if _open_spotify_app():
+            try:
+                # Check failure journal: if desktop failed 3+ times, skip to web player
+                _skip_desktop = False
                 try:
-                    time.sleep(1.5)
+                    from core.failure_journal import get_default_journal
+                    fj = get_default_journal()
+                    if fj:
+                        stats = fj.get_failure_stats()
+                        desktop_fails = stats.get("by_route", {}).get("spotify_desktop", 0)
+                        if desktop_fails >= 3:
+                            logger.info(f"Spotify: skipping desktop (failed {desktop_fails}x), using web player")
+                            _skip_desktop = True
+                except Exception:
+                    pass
 
-                    # Step 1: Search via Spotify URI protocol (direct API — most reliable)
-                    try:
-                        from urllib.parse import quote
-                        import subprocess as _sp
-                        search_uri = f"spotify:search:{quote(query)}"
-                        _sp.Popen(["cmd", "/c", "start", "", search_uri],
-                                  stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
-                        time.sleep(3)
-                    except Exception:
-                        # Fallback: Ctrl+K keyboard search
-                        try:
-                            from automation.ui_control import focus_window, set_control_text
-                            focus_window("Spotify")
-                        except Exception:
-                            import pygetwindow as gw
-                            wins = gw.getWindowsWithTitle("Spotify")
-                            if wins:
-                                try:
-                                    wins[0].activate()
-                                except Exception:
-                                    pass
-                        time.sleep(0.3)
-                        import pyautogui
-                        pyautogui.FAILSAFE = False
-                        pyautogui.hotkey("ctrl", "k")
-                        time.sleep(0.5)
-                        pyautogui.hotkey("ctrl", "a")
-                        time.sleep(0.1)
-                        try:
-                            import pyperclip
-                            pyperclip.copy(query)
-                            pyautogui.hotkey("ctrl", "v")
-                        except ImportError:
-                            pyautogui.typewrite(query, interval=0.03)
-                        time.sleep(3.5)
+                # Strategy 1: Spotify Desktop App (URI protocol + keyboard)
+                if not _skip_desktop:
+                    desktop_result = _play_spotify_desktop(query)
+                    if desktop_result:
+                        return desktop_result
 
-                    # Step 2: Check for no results before trying to click
-                    from computer import _click_first_spotify_song, _spotify_no_results
-                    if _spotify_no_results():
-                        logger.info(f"Spotify: no results for '{query}'")
-                        return f"No results found for '{query}' on Spotify. Try a different search term."
+                # Strategy 2: Spotify Web Player via CDP (reliable, portable)
+                web_result = _play_spotify_web(query)
+                if web_result:
+                    return web_result
+            finally:
+                if _guardian:
+                    _guardian.stop()
 
-                    # Step 3: Click first result via UIA (proper desktop automation)
-                    if _click_first_spotify_song():
-                        # Verify playback
-                        try:
-                            from tools.outcome import check_spotify_playing
-                            playing, title, evidence = check_spotify_playing(timeout=4)
-                            if playing:
-                                logger.info(f"Spotify verified playing: {title}")
-                                return f"Playing '{query}' on Spotify."
-                            # Retry with media key
-                            _press_media_key(VK_MEDIA_PLAY_PAUSE)
-                            time.sleep(2)
-                            playing2, title2, _ = check_spotify_playing(timeout=3)
-                            if playing2:
-                                return f"Playing '{query}' on Spotify."
-                        except ImportError:
-                            pass
-                        return f"Playing '{query}' on Spotify."
-                    # Check again — click failure might be due to no results
-                    if _spotify_no_results():
-                        return f"No results found for '{query}' on Spotify. Try a different search term."
-                    logger.warning("Spotify UIA click-to-play failed")
-                except Exception as e:
-                    logger.error(f"Failed to search in Spotify: {e}")
-            return f"Opened Spotify and searched for '{query}', but couldn't auto-play. Click a result to play."
+            return f"Searched for '{query}' on Spotify but couldn't auto-play. Click a result to play."
 
         elif app == "youtube":
-            from urllib.parse import quote_plus
-            url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
-
-            # Use CDP-enabled browser for proper web automation
-            _opened = False
             try:
-                from automation.browser_driver import browser_navigate, is_cdp_available
-                if not is_cdp_available():
-                    from automation.cdp_session import CDPSession
-                    CDPSession().ensure_chrome()
-                    time.sleep(2)
-                if is_cdp_available():
-                    browser_navigate(url)
-                    _opened = True
-            except Exception:
-                pass
-            if not _opened:
-                import webbrowser
-                webbrowser.open(url)
+                from urllib.parse import quote_plus
+                url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
 
-            time.sleep(5)  # Wait for search results to load
-            from computer import _click_first_youtube_video
-            if _click_first_youtube_video():
-                return f"Playing '{query}' on YouTube."
-            # Retry after additional wait
-            logger.info("YouTube click retry after additional wait")
-            time.sleep(3)
-            if _click_first_youtube_video():
-                return f"Playing '{query}' on YouTube."
+                # Use CDP-enabled browser for proper web automation
+                _opened = False
+                try:
+                    from automation.browser_driver import browser_navigate, is_cdp_available
+                    if not is_cdp_available():
+                        from automation.cdp_session import CDPSession
+                        CDPSession().ensure_chrome()
+                        time.sleep(2)
+                    if is_cdp_available():
+                        browser_navigate(url)
+                        _opened = True
+                except Exception:
+                    pass
+                if not _opened:
+                    import webbrowser
+                    webbrowser.open(url)
+
+                time.sleep(6)  # Wait for search results to fully render
+                from computer import _click_first_youtube_video
+                if _click_first_youtube_video():
+                    return f"Playing '{query}' on YouTube."
+            finally:
+                if _guardian:
+                    _guardian.stop()
             return f"Searched for '{query}' on YouTube but couldn't auto-play. Click a result to play."
 
     elif action == "play":
@@ -249,3 +216,219 @@ def play_music(action, query=None, app="spotify", last_user_input="", quick_chat
     else:
         _press_media_key(VK_MEDIA_PLAY_PAUSE)
         return "Toggled music playback."
+
+
+# ===================================================================
+# Spotify Strategies — Desktop App & Web Player
+# ===================================================================
+
+def _play_spotify_desktop(query):
+    """Try to play music via Spotify desktop app.
+
+    Uses URI protocol to search, then keyboard navigation to play.
+    Fast-fail: max ~15 seconds. Falls through to web player if this fails.
+    Returns result string on success, None on failure.
+    """
+    # Use context: skip open if already running (saves ~2 seconds)
+    _already_running = False
+    try:
+        import subprocess as _sp
+        proc = _sp.run(["tasklist", "/FI", "IMAGENAME eq Spotify.exe", "/FO", "CSV"],
+                       capture_output=True, text=True, timeout=5)
+        _already_running = "spotify.exe" in proc.stdout.lower()
+    except Exception:
+        pass
+
+    if not _already_running:
+        if not _open_spotify_app():
+            return None
+        time.sleep(1.5)
+    try:
+        time.sleep(0.5 if _already_running else 1)
+
+        # Search via Spotify URI protocol
+        try:
+            from urllib.parse import quote
+            import subprocess as _sp
+            search_uri = f"spotify:search:{quote(query)}"
+            _sp.Popen(["cmd", "/c", "start", "", search_uri],
+                      stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+            time.sleep(3)
+        except Exception:
+            return None
+
+        # Quick keyboard attempts only (no vision, no position clicks)
+        from computer import _force_focus_spotify, _check_spotify_playing
+        import pyautogui
+        pyautogui.FAILSAFE = False
+
+        _force_focus_spotify()
+        time.sleep(0.5)
+
+        # Try Tab→Enter (moves from search bar to first result)
+        pyautogui.press("tab")
+        time.sleep(0.3)
+        pyautogui.press("enter")
+        time.sleep(3)
+        if _check_spotify_playing():
+            return f"Playing '{query}' on Spotify."
+
+        # Try Down→Enter
+        _force_focus_spotify()
+        time.sleep(0.3)
+        pyautogui.press("down")
+        time.sleep(0.2)
+        pyautogui.press("enter")
+        time.sleep(3)
+        if _check_spotify_playing():
+            return f"Playing '{query}' on Spotify."
+
+        # Try media Play key (if something was already queued)
+        _press_media_key(VK_MEDIA_PLAY_PAUSE)
+        time.sleep(2)
+        if _check_spotify_playing():
+            return f"Playing '{query}' on Spotify."
+
+    except Exception as e:
+        logger.debug(f"Spotify desktop failed: {e}")
+
+    # Record failure in failure journal for future strategy decisions
+    try:
+        from core.failure_journal import record_failure
+        record_failure(
+            goal=f"play {query} on spotify desktop",
+            route="spotify_desktop",
+            error_class="app_layout_drift",
+            tool_sequence=["spotify_uri_search", "keyboard_navigation"],
+            error_text="Desktop keyboard navigation failed to start playback",
+        )
+    except Exception:
+        pass
+    return None
+
+
+def _play_spotify_web(query):
+    """Play music via Spotify Web Player (open.spotify.com) using CDP.
+
+    Reliable, portable approach — same pipeline as YouTube.
+    Uses JavaScript DOM manipulation via Chrome DevTools Protocol.
+    Returns result string on success, None on failure.
+    """
+    try:
+        from urllib.parse import quote_plus
+        from automation.browser_driver import (
+            browser_navigate, is_cdp_available, _check_cdp,
+            _get_active_tab_ws, _send_cdp_command, browser_get_url,
+        )
+    except ImportError:
+        logger.debug("Spotify Web: browser_driver not available")
+        return None
+
+    # Ensure CDP is available
+    if not _check_cdp():
+        try:
+            from automation.cdp_session import CDPSession
+            CDPSession().ensure_chrome()
+            time.sleep(2)
+        except Exception:
+            pass
+    if not _check_cdp():
+        logger.debug("Spotify Web: CDP not available")
+        return None
+
+    # Navigate to Spotify Web search
+    search_url = f"https://open.spotify.com/search/{quote_plus(query)}"
+    logger.info(f"Spotify Web: navigating to {search_url}")
+    browser_navigate(search_url)
+    time.sleep(5)  # Wait for page to load
+
+    ws = _get_active_tab_ws()
+    if not ws:
+        return None
+
+    # JavaScript: click the first play button on Spotify Web search results
+    js_play = """
+    (() => {
+        // Wait for search results to render
+        // Strategy A: Find and click first song row's play button
+        const rows = document.querySelectorAll(
+            '[data-testid="tracklist-row"], [data-testid="track-row"]'
+        );
+        for (const row of rows) {
+            const playBtn = row.querySelector('button[data-testid="play-button"], button[aria-label*="Play"]');
+            if (playBtn) {
+                playBtn.click();
+                return 'clicked play button in track row';
+            }
+            // Try clicking the row itself (opens track)
+            const titleLink = row.querySelector('a[href*="/track/"]');
+            if (titleLink) {
+                titleLink.click();
+                return 'clicked track link: ' + (titleLink.textContent || '').trim().substring(0, 40);
+            }
+        }
+
+        // Strategy B: Find any "Play" button on the page
+        const playButtons = document.querySelectorAll(
+            'button[data-testid="play-button"], button[aria-label*="Play"]'
+        );
+        for (const btn of playButtons) {
+            if (btn.offsetWidth > 0 && btn.offsetHeight > 0) {
+                btn.click();
+                return 'clicked play button';
+            }
+        }
+
+        // Strategy C: Click first card/item in search results
+        const cards = document.querySelectorAll(
+            '[data-testid="card-clickable"], [data-testid="top-result-card"]'
+        );
+        for (const card of cards) {
+            const playBtn = card.querySelector('button[data-testid="play-button"], button[aria-label*="Play"]');
+            if (playBtn) {
+                playBtn.click();
+                return 'clicked card play button';
+            }
+            card.click();
+            return 'clicked card: ' + (card.textContent || '').trim().substring(0, 40);
+        }
+
+        // Strategy D: Click first link with /track/ or /playlist/ or /album/
+        const links = document.querySelectorAll(
+            'a[href*="/track/"], a[href*="/playlist/"], a[href*="/album/"]'
+        );
+        for (const link of links) {
+            if (link.offsetWidth > 0 && link.textContent.trim().length > 0) {
+                link.click();
+                return 'clicked link: ' + link.textContent.trim().substring(0, 40);
+            }
+        }
+
+        return 'no playable elements found';
+    })()
+    """
+
+    # Retry up to 3 times (page may still be loading)
+    for attempt in range(3):
+        result = _send_cdp_command(
+            ws, "Runtime.evaluate",
+            {"expression": js_play, "returnByValue": True}
+        )
+        if result:
+            value = str(result.get("result", {}).get("value", ""))
+            if "clicked" in value.lower():
+                logger.info(f"Spotify Web CDP (attempt {attempt+1}): {value}")
+                time.sleep(3)
+                return f"Playing '{query}' on Spotify Web Player."
+            elif "no playable" in value:
+                if attempt < 2:
+                    logger.info(f"Spotify Web: no elements yet, waiting (attempt {attempt+1})")
+                    time.sleep(3)
+                    continue
+        else:
+            if attempt < 2:
+                time.sleep(2)
+                continue
+
+    logger.warning("Spotify Web: all CDP strategies failed")
+    return None

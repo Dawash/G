@@ -24,7 +24,7 @@ from .blackboard import PlanNode
 logger = logging.getLogger(__name__)
 
 # Max steps in a plan (prevent runaway)
-MAX_PLAN_STEPS = 15
+MAX_PLAN_STEPS = 999
 # How many alternative approaches to consider
 BRANCH_FACTOR = 3
 # Min score to accept a plan branch (0-100)
