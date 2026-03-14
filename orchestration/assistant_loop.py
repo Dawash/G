@@ -724,7 +724,14 @@ def run(runtime_state=None):
                 _BRAIN_TIMEOUT = 60  # 7b and smaller
             # Dynamic acknowledgment: longer delay for simple queries (likely fast), shorter for complex
             _ack_delay = 4.0 if len(user_input.split()) <= 5 else 2.5
-            _ack_timer = threading.Timer(_ack_delay, lambda: speak_async("Working on it..."))
+            import random as _rnd
+            _ack_phrases = [
+                "Working on it...", "Let me handle that...", "On it...",
+                "Give me a moment...", "Just a second...", "Processing that...",
+                "Let me check...", "One moment...", "Looking into it...",
+                "Hang on...", "Let me figure that out...", "Getting that for you...",
+            ]
+            _ack_timer = threading.Timer(_ack_delay, lambda: speak_async(_rnd.choice(_ack_phrases)))
             _ack_timer.start()
             try:
                 _t0 = time.time()

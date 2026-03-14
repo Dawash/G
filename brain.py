@@ -2369,7 +2369,13 @@ class Brain:
             self._ctx.append({"role": "user", "content": user_input})
             if self.speak_fn:
                 try:
-                    self.speak_fn("Working on it...")
+                    import random as _rnd
+                    _agent_acks = [
+                        "Working on it...", "Let me handle that...", "On it...",
+                        "Give me a moment...", "Let me take care of that...",
+                        "I'll get that done...", "Leave it to me...",
+                    ]
+                    self.speak_fn(_rnd.choice(_agent_acks))
                 except Exception:
                     pass
             result = self._run_agent_mode(user_input)
@@ -2384,7 +2390,15 @@ class Brain:
             self._ctx.append({"role": "user", "content": user_input})
             if self.speak_fn:
                 try:
-                    self.speak_fn("Let me research that for you...")
+                    import random as _rnd
+                    _research_acks = [
+                        "Let me research that for you...",
+                        "Let me dig into that...",
+                        "Researching that now...",
+                        "Let me find out...",
+                        "Looking that up for you...",
+                    ]
+                    self.speak_fn(_rnd.choice(_research_acks))
                 except Exception:
                     pass
             result = self._run_research(user_input)
