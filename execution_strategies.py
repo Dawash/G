@@ -818,7 +818,7 @@ _DIRECT_TOOL_PATTERNS = [
     (r"^(?:open|launch|start|run)\s+(.+?)(?:\s+(?:app(?:lication)?|for me|please|now|real quick))*$",
      lambda m: {"tool": "open_app", "args": {"name": re.sub(r'\s+(?:for me|please|now|real quick)$', '', m.group(1).strip())}}
      if "side by side" not in m.group(1).lower() and "split" not in m.group(1).lower()
-        and not re.search(r'\band\s+(?:type|search|play|go|find|click|fill|navigate|then|also|send)', m.group(1), re.I)
+        and not re.search(r'\band\s+(?:type|search|play|go|find|click|fill|navigate|then|also|send|check|open|watch|listen|browse|read|download|buy|order|book|show)', m.group(1), re.I)
      else None),
     (r"^(?:close|quit|exit|stop|kill)\s+(.+?)(?:\s+app)?$",
      lambda m: {"tool": "close_app", "args": {"name": m.group(1).strip()}}
@@ -839,16 +839,18 @@ _DIRECT_TOOL_PATTERNS = [
     (r"play\s+(.+?)\s+on\s+youtube",
      lambda m: {"tool": "play_music", "args": {"action": "play_query", "query": m.group(1).strip(), "app": "youtube"}}),
 
-    # Search — only simple searches, not compound "search X and do Y"
+    # Search — only simple searches, not compound or site-specific
     (r"^(?:search|google)\s+(?:for\s+)?(.+)$",
      lambda m: {"tool": "google_search", "args": {"query": m.group(1).strip()}}
      if not re.search(r'\band\s+(?:play|open|show|do|then)\b', m.group(1), re.I)
+        and not re.match(r'^(?:amazon|ebay|reddit|twitter|facebook|instagram|github|stackoverflow|netflix|youtube|spotify)\b', m.group(1).strip(), re.I)
      else None),
 
-    # Weather
+    # Weather — must be primary intent, not embedded in compound command
     (r"(?:weather|temperature|rain)\s+(?:in|for|at)\s+(.+)",
-     lambda m: {"tool": "get_weather", "args": {"city": m.group(1).strip()}}),
-    (r"(?:what(?:'s| is) the )?weather",
+     lambda m: {"tool": "get_weather", "args": {"city": m.group(1).strip()}}
+     if not re.search(r'\band\s+', m.string[:m.start()]) else None),
+    (r"^(?:what(?:'?s| is) the )?(?:weather|temperature)$|^(?:how(?:'?s| is) the )?weather$",
      lambda m: {"tool": "get_weather", "args": {}}),
 
     # Time / Date / Day
@@ -886,17 +888,22 @@ _DIRECT_TOOL_PATTERNS = [
     (r"^volume\s+down$|^(?:turn|decrease|lower)\s+(?:the\s+)?volume(?:\s+down)?$|^quieter$|^softer$",
      lambda m: {"tool": "play_music", "args": {"action": "volume_down"}}),
 
+    # Screenshot
+    (r"(?:take|capture|grab|save)\s+(?:a\s+)?screenshot",
+     lambda m: {"tool": "take_screenshot", "args": {}}),
+
     # Forecast
     (r"forecast\s*(?:for|in)?\s*(.+)?",
      lambda m: {"tool": "get_forecast", "args": {"city": (m.group(1) or "").strip()}}),
 
     # Toggle settings — wifi, bluetooth, dark mode, etc.
+    # Use "state" (not "value") to match tool's expected arg name
     (r"(?:turn|switch)\s+(on|off)\s+(?:the\s+)?(.+)",
-     lambda m: {"tool": "toggle_setting", "args": {"setting": m.group(2).strip(), "value": m.group(1)}}),
+     lambda m: {"tool": "toggle_setting", "args": {"setting": m.group(2).strip(), "state": m.group(1)}}),
     (r"(?:enable|disable)\s+(?:the\s+)?(.+)",
-     lambda m: {"tool": "toggle_setting", "args": {"setting": m.group(1).strip(), "value": "on" if "enable" in m.string else "off"}}),
+     lambda m: {"tool": "toggle_setting", "args": {"setting": m.group(1).strip(), "state": "on" if "enable" in m.string else "off"}}),
     (r"(.+?)\s+(?:on|off)$",
-     lambda m: {"tool": "toggle_setting", "args": {"setting": m.group(1).strip(), "value": "on" if m.string.rstrip().endswith("on") else "off"}}
+     lambda m: {"tool": "toggle_setting", "args": {"setting": m.group(1).strip(), "state": "on" if m.string.rstrip().endswith("on") else "off"}}
      if m.group(1).strip().lower() in {"wifi", "bluetooth", "dark mode", "night light", "hotspot", "airplane mode", "location"}
      else None),
 ]

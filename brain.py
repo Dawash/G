@@ -441,8 +441,8 @@ def _register_undo_for_tool(tool_name, arguments, action_registry):
                 "description": f"closed {name}",
             })
         elif tool_name == "toggle_setting":
-            setting = arguments.get("setting", "")
-            state = arguments.get("state", "off")
+            setting = arguments.get("setting") or arguments.get("feature", "")
+            state = arguments.get("state") or arguments.get("value", "off")
             opposite = "on" if state == "off" else "off"
             _undo_stack.append({
                 "time": time.time(),
@@ -832,8 +832,9 @@ def _execute_tool_inner(tool_name, arguments, action_registry, reminder_mgr=None
 
         # --- System settings toggle (Bluetooth, WiFi, etc.) ---
         elif tool_name == "toggle_setting":
-            setting = arguments.get("setting", "").lower()
-            state = arguments.get("state", "off").lower()
+            # Resolve common LLM arg aliases (feature->setting, value->state)
+            setting = (arguments.get("setting") or arguments.get("feature", "")).lower()
+            state = (arguments.get("state") or arguments.get("value", "off")).lower()
             return _toggle_system_setting(setting, state)
 
         # --- Music playback control ---
@@ -1244,7 +1245,7 @@ def _auto_escalate_to_agent(tool_name, arguments, what_done, what_missing, user_
     if action_registry:
         execute_tool._action_registry = action_registry
     # Run agent to finish the partially completed task
-    result = _run_agent_with_timeout(goal, timeout=3600, blocking=True)
+    result = _run_agent_with_timeout(goal, timeout=120, blocking=True)
     _brain_state.reset_escalation()
     if result:
         return result
@@ -1537,7 +1538,9 @@ class Brain:
             # Don't match compound intents like "search and play"
             if query and not _re.search(r'\band\s+(?:play|open|show|do|then)\b', query, _re.I):
                 # Don't match if target is youtube/spotify (those need agent mode)
-                if not _re.search(r'\bon\s+(?:youtube|spotify)\b', query, _re.I):
+                # Don't match "search <site> for X" (e.g. "search amazon for headphones")
+                _site_search = _re.match(r'^(?:amazon|ebay|reddit|twitter|facebook|instagram|github|stackoverflow|netflix|hulu)\b', query, _re.I)
+                if not _re.search(r'\bon\s+(?:youtube|spotify)\b', query, _re.I) and not _site_search:
                     logger.info(f"Direct dispatch: google_search fast-path ({query})")
                     result = execute_tool("google_search", {"query": query}, self.action_registry)
                     if result:
@@ -2259,6 +2262,8 @@ class Brain:
                                f"(similarity={_skill_sim:.2f}) — proceeding with caution")
             logger.info(f"Executing stored skill: {skill_match['name']}")
             try:
+                # Set user input for tool validation (prevents stale input issues)
+                execute_tool._last_user_input = user_input
                 # Replay the skill's tool sequence
                 results = []
                 for tc in skill_match["tool_sequence"]:

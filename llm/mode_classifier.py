@@ -43,8 +43,9 @@ QUICK_PATTERNS = [
     re.compile(r"^(what'?s? my|show my|check my) (ip|ip address|network|system|processes)\b", re.I),
     # Software management
     re.compile(r"^(install|uninstall|update)\s+\w+", re.I),
-    # File operations
-    re.compile(r"^(move|copy|rename|delete|zip|unzip|find|list|organize)\s+", re.I),
+    # File operations — "find" only for files/folders, not "find the best X"
+    re.compile(r"^(move|copy|rename|delete|zip|unzip|list|organize)\s+", re.I),
+    re.compile(r"^find\s+(?!the best|me the|the top|a good)(?:file|folder|document|pdf|doc|image|photo|screenshot)\b", re.I),
 ]
 
 # Patterns that indicate multi-step / screen-interactive tasks -> agent mode
@@ -73,6 +74,9 @@ AGENT_PATTERNS = [
     r"(show|demonstrate|preview|display|open)\s+(it|that|the result|the file|what you (made|created))",
     # Go to / navigate specific page/section in app
     r"go to\b.+\b(in|on)\s+(chrome|firefox|edge|browser|spotify|settings)",
+    # Go to / navigate and then do something
+    r"(?:go to|navigate to|visit)\s+\w+.+\band\s+(?:upvote|downvote|like|comment|post|reply|click|share|subscribe|follow|watch|read|check|vote)",
+    r"\bnavigate to\b.+\band\s+(?:turn|enable|disable|change|set|toggle|click|select)",
     # Download / install tasks
     r"\b(download|install)\b.+\b(from|on)\s+",
     # Log in / sign in
@@ -140,6 +144,20 @@ def classify_mode(user_input, quick_chat_fn=None):
         return decision
 
     lower = user_input.lower().strip()
+
+    # ---- COMPOUND ACTION PRE-CHECK: "X and Y" where Y is an action → agent ----
+    # Must run BEFORE direct tool patterns, which would match only the first part
+    if re.search(r'\band\s+(?:then\s+)?(?:send|email|post|upload|save|share|book|order|buy|play|search|open|go|navigate|click|type|fill|create|make|write|download|install|take|capture|paste|compose|reply|forward)\b', lower):
+        # Confirm it's truly compound (has a preceding action/object, not just "and open X")
+        if re.search(r'(?:^|\s)(?:\w+\s+){2,}and\s+', lower):
+            logger.info("Agent mode: compound action detected (X and Y)")
+            return _finish(ModeDecision("agent", 0.9, "compound action: X and Y"))
+
+    # ---- APP-SPECIFIC INTERACTIONS: "X on/in <app>" or "search <site> for Y" ----
+    if re.search(r'\b(?:send|compose|write|post)\s+.+\b(?:on|in|via|using|through)\s+(?:whatsapp|telegram|slack|discord|messenger|teams)\b', lower):
+        return _finish(ModeDecision("agent", 0.9, "messaging app interaction"))
+    if re.search(r'\bsearch\s+(?:amazon|ebay|flipkart|walmart|etsy|aliexpress)\b.+\bfor\b', lower):
+        return _finish(ModeDecision("agent", 0.9, "site-specific search"))
 
     # ---- PRE-CLASSIFICATION: direct tool pattern match (fastest) ----
     for pattern, tool_name in DIRECT_TOOL_PATTERNS:
@@ -218,8 +236,10 @@ def classify_mode(user_input, quick_chat_fn=None):
     _words = lower.split()
     _AGENT_KEYWORDS = ["autonomous", "automate", "automatic", "agent"]
     _RESEARCH_KEYWORDS = ["research", "investigate", "analyze", "study"]
+    # Common words that should NOT fuzzy-match into different categories
+    _FUZZY_EXCLUDE = {"search", "find", "start", "state", "stage", "style", "store", "study"}
     for word in _words:
-        if len(word) >= 5:  # Only fuzzy-match longer words
+        if len(word) >= 5 and word not in _FUZZY_EXCLUDE:
             for kw in _AGENT_KEYWORDS:
                 if SequenceMatcher(None, word, kw).ratio() > 0.80:
                     return _finish(ModeDecision("agent", 0.85, f"fuzzy match: {word}→{kw}"))

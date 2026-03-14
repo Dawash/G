@@ -262,6 +262,8 @@ class ToolExecutor:
                     pass
 
         # --- Pre-execution: normalize LLM arguments ---
+        # First resolve arg_aliases (e.g. "value" -> "state", "app_name" -> "name")
+        arguments = self.registry.normalize_args(tool_name, arguments)
         arguments = self._normalize_arguments(tool_name, arguments)
 
         # --- Execute handler ---

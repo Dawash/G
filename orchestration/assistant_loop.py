@@ -424,6 +424,7 @@ def run(runtime_state=None):
     is_connected = True
     interaction_count = 0
     _last_session_save = time.time()
+    _barge_in_text = None  # Carries barge-in input across loop iterations
 
     # === MAIN LOOP ===
     while True:
@@ -470,6 +471,11 @@ def run(runtime_state=None):
         except Exception:
             interrupted = None
 
+        # Pick up barge-in text from previous iteration (speech interruption)
+        if _barge_in_text:
+            user_input = _barge_in_text
+            _barge_in_text = None
+            interrupted = user_input  # skip listen()
         if not interrupted:
             _debug_trace("waiting for listen()")
             user_input = listen()
@@ -804,10 +810,8 @@ def run(runtime_state=None):
                     sys.stdout.flush()
                 _debug_trace(f"Loop#{interaction_count} post-flush, going to listen")
                 if interrupted:
-                    user_input = interrupted
-                    interaction_count += 1
+                    _barge_in_text = interrupted
                     memory.log_event(session_id, "barge_in", {"text": interrupted})
-                    continue
                 continue
 
         # Dead key warning (once)
