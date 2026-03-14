@@ -222,19 +222,28 @@ def classify_mode(user_input, quick_chat_fn=None):
             return _finish(ModeDecision("agent", 0.9, f"agent pattern: {pattern[:50]}"))
 
     # ---- LLM CLASSIFICATION: ambiguous cases ----
+    # For commands that don't match any pattern, ask the LLM to classify
     words = lower.split()
-    has_action = re.search(r"\b(create|make|build|play|search|find|go|download|install|open .+ and)\b", lower)
-    if len(words) >= 5 and has_action and quick_chat_fn:
+    if len(words) >= 4 and quick_chat_fn:
         try:
             llm_answer = quick_chat_fn(
-                f"Does this task need MULTIPLE steps on a computer screen "
-                f"(opening apps, clicking buttons, typing in search bars, etc.)? "
-                f"Task: \"{user_input}\"\n"
-                f"Answer ONLY 'yes' or 'no'."
+                f"Classify this command into exactly ONE category:\n"
+                f"- QUICK: simple single-step task (open app, check weather, play music, set reminder)\n"
+                f"- AGENT: needs multiple UI steps (search+click, navigate+fill, open+interact)\n"
+                f"- RESEARCH: needs web research across multiple sources\n"
+                f"- CHAT: casual conversation, knowledge question, greeting\n"
+                f"Command: \"{user_input}\"\n"
+                f"Reply with ONLY the category name (QUICK/AGENT/RESEARCH/CHAT)."
             )
-            if llm_answer and "yes" in llm_answer.lower()[:10]:
-                logger.info(f"Agent mode triggered by LLM classification")
-                return _finish(ModeDecision("agent", 0.7, "LLM classified as agent"))
+            if llm_answer:
+                _cls = llm_answer.strip().upper()[:10]
+                if "AGENT" in _cls:
+                    logger.info("LLM classified as agent mode")
+                    return _finish(ModeDecision("agent", 0.7, "LLM classified as agent"))
+                elif "RESEARCH" in _cls:
+                    logger.info("LLM classified as research mode")
+                    return _finish(ModeDecision("research", 0.7, "LLM classified as research"))
+                # QUICK and CHAT both fall through to default quick mode
         except Exception:
             pass
 
