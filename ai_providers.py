@@ -107,9 +107,9 @@ class ChatProvider:
                 return f"I'm being rate limited by the API. I'll retry in {wait} seconds. Try again shortly."
             return self._offline_fallback(user_input)
         except (requests.ConnectionError, requests.Timeout) as e:
-            # Transient error — keep the user message so it can be retried
+            # Transient error — pop message to prevent stale duplication on next call
             logging.error(f"API call failed ({self.provider_name}, transient): {e}")
-            # Do NOT pop — message stays in history for automatic retry on next call
+            self.messages.pop()
             return self._offline_fallback(user_input)
         except Exception as e:
             logging.error(f"API call failed ({self.provider_name}): {e}")

@@ -1386,6 +1386,10 @@ def detect_compound_intent(text):
         step2 = m.group(2).strip()
         # Both steps must be actionable (not just filler)
         if len(step1) > 3 and len(step2) > 3:
+            # Don't split if step2 uses pronouns that need step1 context
+            # (e.g., "open chrome and maximize it" — "it" refers to chrome)
+            if re.search(r'\b(?:it|this|that)\s*$', step2) or re.match(r'^(?:do|with|using|to)\s+(?:it|this|that)\b', step2):
+                return []  # keep as single intent for LLM to handle
             return [step1, step2]
     return []
 

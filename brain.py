@@ -700,8 +700,7 @@ def execute_tool(tool_name, arguments, action_registry, reminder_mgr=None, speak
     if tool_name == "open_app" and result:
         app_name = arguments.get("name", "")
         try:
-            from memory import MemoryStore
-            _m = MemoryStore()
+            _m = _get_memory_store()
             if "not found" in str(result).lower():
                 _m.record_app_status(app_name, False)
             else:
@@ -1752,23 +1751,19 @@ class Brain:
                         safe_expr = safe_expr.rstrip(')') + ') ** 0.5'
                     if _re.match(r'^[\d\s+\-*/.()]+$', safe_expr):
                         # Guard against CPU-exhausting exponentiation
+                        _math_ok = True
                         if '**' in safe_expr:
-                            # Block chains like 10**10**10 or huge exponents
                             _exp_parts = safe_expr.split('**')
                             if len(_exp_parts) > 2:
-                                pass  # skip chained exponentiation
+                                _math_ok = False  # block chained exponentiation
                             elif any(float(p.strip()) > 1000 for p in _exp_parts if p.strip().replace('.', '').isdigit()):
-                                pass  # skip huge exponents
-                            else:
-                                import ast
-                                answer = eval(compile(ast.parse(safe_expr, mode='eval'), '<math>', 'eval'))
-                                ans_str = f"{answer:g}" if isinstance(answer, float) else str(answer)
-                        else:
+                                _math_ok = False  # block huge exponents
+                        if _math_ok:
                             import ast
                             answer = eval(compile(ast.parse(safe_expr, mode='eval'), '<math>', 'eval'))
                             ans_str = f"{answer:g}" if isinstance(answer, float) else str(answer)
-                        logger.info(f"Direct dispatch: math fast-path ({expr} = {ans_str})")
-                        return f"{expr} = {ans_str}"
+                            logger.info(f"Direct dispatch: math fast-path ({expr} = {ans_str})")
+                            return f"{expr} = {ans_str}"
                 except ZeroDivisionError:
                     return "You can't divide by zero — it's undefined."
                 except Exception:
@@ -2035,8 +2030,10 @@ class Brain:
 
         result_str = str(result).lower()
 
-        # Clear failure indicators
-        if any(w in result_str for w in [
+        # Check only the first 80 chars for failure indicators —
+        # avoids false positives from content like "no fog found today"
+        _result_prefix = result_str[:80]
+        if any(w in _result_prefix for w in [
             "error", "failed", "not found", "blocked", "timed out",
             "permission denied", "could not", "couldn't", "invalid",
         ]):
@@ -2283,6 +2280,8 @@ class Brain:
                 logger.warning(f"Low-confidence skill match: {skill_match['name']} "
                                f"(similarity={_skill_sim:.2f}) — proceeding with caution")
             logger.info(f"Executing stored skill: {skill_match['name']}")
+            # Record user message in context for follow-up coherence
+            self._ctx.append({"role": "user", "content": user_input})
             try:
                 # Set user input for tool validation (prevents stale input issues)
                 execute_tool._last_user_input = user_input
@@ -2325,7 +2324,10 @@ class Brain:
                 if results:
                     self._skill_lib.record_use(skill_match["name"], success=True)
                     _prefix = "(low-confidence skill) " if _low_confidence else ""
-                    return f"{_prefix}Done — {results[-1]}" if results else "Skill executed."
+                    _skill_response = f"{_prefix}Done — {results[-1]}" if results else "Skill executed."
+                    self._ctx.append({"role": "assistant", "content": _skill_response})
+                    self._ctx.trim()
+                    return _skill_response
             except Exception as e:
                 logger.warning(f"Skill execution failed: {e}")
                 if self._skill_lib:

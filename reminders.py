@@ -304,11 +304,14 @@ class ReminderManager:
         """Handle a fired reminder — reschedule or deactivate."""
         with self._lock:
             if reminder.recurrence:
-                # Reschedule recurring reminders
+                # Reschedule recurring reminders — advance past now to avoid burst
+                now = time.time()
                 if reminder.recurrence == "daily":
-                    reminder.trigger_time += 86400
+                    while reminder.trigger_time <= now:
+                        reminder.trigger_time += 86400
                 elif reminder.recurrence == "weekly":
-                    reminder.trigger_time += 7 * 86400
+                    while reminder.trigger_time <= now:
+                        reminder.trigger_time += 7 * 86400
                 elif reminder.recurrence == "weekdays":
                     next_dt = datetime.fromtimestamp(reminder.trigger_time)
                     while True:

@@ -1015,7 +1015,8 @@ def _listen_whisper():
 
                     with _language_lock:
                         _detected_language = detected
-                    logging.info(f"Whisper language: {detected} (raw: {info.language}, prob: {prob:.2f})")
+                    _raw_lang = info.language if 'info' in dir() else detected_lang
+                    logging.info(f"Whisper language: {detected} (raw: {_raw_lang}, prob: {prob:.2f})")
 
                 with _language_lock:
                     _print_lang = _detected_language
