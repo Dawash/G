@@ -127,12 +127,21 @@ def _send_cdp_command(ws_url, method, params=None):
         return None
 
 
-def _get_active_tab_ws():
-    """Get the WebSocket URL for the active tab."""
+def _get_active_tab_ws(url_contains=None):
+    """Get the WebSocket URL for the active tab.
+
+    Args:
+        url_contains: If set, find the tab whose URL contains this string.
+                      Useful after navigation to target the correct tab.
+    """
     tabs = _get_tabs()
     if not tabs:
         return None
-    # First tab is usually the active one
+    if url_contains:
+        for tab in tabs:
+            if url_contains.lower() in tab.get("url", "").lower():
+                return tab.get("webSocketDebuggerUrl")
+    # Fallback: first tab
     return tabs[0].get("webSocketDebuggerUrl")
 
 

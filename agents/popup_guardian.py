@@ -436,7 +436,7 @@ class PopupGuardian:
         if not _check_cdp():
             return
 
-        ws = _get_active_tab_ws()
+        ws = _get_active_tab_ws(url_contains="youtube.com")
         if not ws:
             return
 

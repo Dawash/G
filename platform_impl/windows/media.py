@@ -342,19 +342,39 @@ def _play_spotify_web(query):
     search_url = f"https://open.spotify.com/search/{quote_plus(query)}"
     logger.info(f"Spotify Web: navigating to {search_url}")
     browser_navigate(search_url)
-    time.sleep(5)  # Wait for page to load
 
-    ws = _get_active_tab_ws()
+    # Smart wait: poll for page readiness instead of fixed sleep
+    _page_ready = False
+    for _wait in range(8):  # Up to 8s
+        time.sleep(1)
+        ws = _get_active_tab_ws(url_contains="spotify.com")
+        if not ws:
+            continue
+        # Check if Spotify loaded or if we're on a login page
+        _check = _send_cdp_command(ws, "Runtime.evaluate", {
+            "expression": "document.readyState + '|' + document.title + '|' + (document.querySelector('[data-testid=\"login-button\"], [data-testid=\"login-form\"], form[action*=\"login\"]') ? 'LOGIN' : 'OK')",
+            "returnByValue": True
+        })
+        if _check:
+            _val = str(_check.get("result", {}).get("value", ""))
+            if "LOGIN" in _val:
+                logger.warning("Spotify Web: login required — user not logged in to CDP Chrome profile")
+                return "Spotify Web Player requires login. Please open Chrome and log into open.spotify.com first."
+            if "complete" in _val.lower():
+                _page_ready = True
+                break
+
+    if not _page_ready:
+        ws = _get_active_tab_ws(url_contains="spotify.com")
     if not ws:
         return None
 
     # JavaScript: click the first play button on Spotify Web search results
     js_play = """
     (() => {
-        // Wait for search results to render
         // Strategy A: Find and click first song row's play button
         const rows = document.querySelectorAll(
-            '[data-testid="tracklist-row"], [data-testid="track-row"]'
+            '[data-testid="tracklist-row"], [data-testid="track-row"], [role="row"]'
         );
         for (const row of rows) {
             const playBtn = row.querySelector('button[data-testid="play-button"], button[aria-label*="Play"]');
@@ -362,7 +382,6 @@ def _play_spotify_web(query):
                 playBtn.click();
                 return 'clicked play button in track row';
             }
-            // Try clicking the row itself (opens track)
             const titleLink = row.querySelector('a[href*="/track/"]');
             if (titleLink) {
                 titleLink.click();
@@ -370,9 +389,9 @@ def _play_spotify_web(query):
             }
         }
 
-        // Strategy B: Find any "Play" button on the page
+        // Strategy B: Find any visible "Play" button
         const playButtons = document.querySelectorAll(
-            'button[data-testid="play-button"], button[aria-label*="Play"]'
+            'button[data-testid="play-button"], button[aria-label*="Play"], button[aria-label*="play"]'
         );
         for (const btn of playButtons) {
             if (btn.offsetWidth > 0 && btn.offsetHeight > 0) {
@@ -383,7 +402,7 @@ def _play_spotify_web(query):
 
         // Strategy C: Click first card/item in search results
         const cards = document.querySelectorAll(
-            '[data-testid="card-clickable"], [data-testid="top-result-card"]'
+            '[data-testid="card-clickable"], [data-testid="top-result-card"], [data-testid="herocard-click-handler"]'
         );
         for (const card of cards) {
             const playBtn = card.querySelector('button[data-testid="play-button"], button[aria-label*="Play"]');
@@ -406,11 +425,20 @@ def _play_spotify_web(query):
             }
         }
 
+        // Strategy E: Double-click first visible content row (generic fallback)
+        const anyRows = document.querySelectorAll('[role="listitem"], [role="gridcell"], [data-testid]');
+        for (const el of anyRows) {
+            if (el.offsetWidth > 30 && el.textContent.trim().length > 2) {
+                el.dispatchEvent(new MouseEvent('dblclick', {bubbles: true}));
+                return 'double-clicked content element';
+            }
+        }
+
         return 'no playable elements found';
     })()
     """
 
-    # Retry up to 3 times (page may still be loading)
+    # Retry up to 3 times (results may still be rendering)
     for attempt in range(3):
         result = _send_cdp_command(
             ws, "Runtime.evaluate",
@@ -420,12 +448,12 @@ def _play_spotify_web(query):
             value = str(result.get("result", {}).get("value", ""))
             if "clicked" in value.lower():
                 logger.info(f"Spotify Web CDP (attempt {attempt+1}): {value}")
-                time.sleep(3)
+                time.sleep(2)
                 return f"Playing '{query}' on Spotify Web Player."
             elif "no playable" in value:
                 if attempt < 2:
                     logger.info(f"Spotify Web: no elements yet, waiting (attempt {attempt+1})")
-                    time.sleep(3)
+                    time.sleep(2)
                     continue
         else:
             if attempt < 2:

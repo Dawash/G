@@ -407,7 +407,7 @@ def _click_first_youtube_video():
                 pass
 
         if _check_cdp():
-            ws = _get_active_tab_ws()
+            ws = _get_active_tab_ws(url_contains="youtube.com")
             if ws:
                 # JS to click first non-ad video
                 js_click = """
@@ -525,7 +525,7 @@ def _skip_youtube_ads():
     if not _check_cdp():
         return False
 
-    ws = _get_active_tab_ws()
+    ws = _get_active_tab_ws(url_contains="youtube.com")
     if not ws:
         return False
 
