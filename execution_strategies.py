@@ -247,6 +247,15 @@ _CLI_COMMANDS = [
     (r"\bpublic\s*ip",
      lambda m: "(Invoke-WebRequest -Uri 'https://api.ipify.org' -UseBasicParsing).Content"),
 
+    # Volume set to specific percentage
+    (r"set\s+(?:the\s+)?volume\s+(?:to\s+)?(\d{1,3})\s*(?:%|percent)?",
+     lambda m: f"$v=[Math]::Round(({_sanitize_ps(m.group(1))}/100)*65535); "
+               f"(New-Object -ComObject WScript.Shell).SendKeys([char]173); "
+               f"Start-Sleep -Milliseconds 100; "
+               f"(New-Object -ComObject WScript.Shell).SendKeys([char]173); "
+               f"1..([Math]::Round({_sanitize_ps(m.group(1))}/2)) | ForEach-Object {{ (New-Object -ComObject WScript.Shell).SendKeys([char]175) }}; "
+               f"'Volume set to {m.group(1)}%'"),
+
     # Windows settings via PowerShell
     (r"\bdark\s*mode\s*(?:on|enable)|(?:turn|switch|enable)\s+(?:on\s+)?dark\s*mode",
      lambda m: 'Set-ItemProperty -Path "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize" -Name "AppsUseLightTheme" -Value 0 -Force; Set-ItemProperty -Path "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize" -Name "SystemUsesLightTheme" -Value 0 -Force; "Dark mode enabled"'),

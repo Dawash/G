@@ -190,10 +190,10 @@ def classify_mode(user_input, quick_chat_fn=None):
                 r"explain .+ in detail\b",
                 r"\bhistory of\b", r"\bevolution of\b",
                 r"search for .+(history|overview|guide|tutorial)\b",
-                # Knowledge questions needing multi-source research (6+ words)
+                # Knowledge questions needing multi-source research (lengthy questions only)
                 # Short factual questions ("what is the capital of france") go to quick_chat
-                r"^what (?:is|are) (?!the (?:time|date|weather|temperature|forecast|capital))\w.{25,}",
-                r"^(?:how|why) (?:does|do|is|are|did|can|could|would|should) .{25,}",
+                r"^what (?:is|are) (?!the (?:time|date|weather|temperature|forecast|capital|boiling|melting|speed|meaning|definition|symbol|formula|difference|color|colour|largest|smallest|longest|tallest|oldest|fastest|population|height|weight|distance|area|diameter|density))\w.{35,}",
+                r"^(?:how|why) (?:does|do|is|are|did|can|could|would|should) .{35,}",
             ]
             for pattern in research_triggers:
                 if re.search(pattern, lower):

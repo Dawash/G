@@ -1882,7 +1882,7 @@ class Brain:
             # Allow knowledge about tech topics (RAM, CPU, etc.) — only block system queries
             and not _RE_SYSTEM_QUERY.search(user_input)
         )
-        if _no_tool_needed and len(user_input.split()) <= 20:
+        if _no_tool_needed and len(user_input.split()) <= 40:
             # Check if this is a real-time question before even asking the LLM
             _needs_realtime = _is_realtime_question(user_input)
 
@@ -2339,7 +2339,17 @@ class Brain:
                 if results:
                     self._skill_lib.record_use(skill_match["name"], success=True)
                     _prefix = "(low-confidence skill) " if _low_confidence else ""
-                    _skill_response = f"{_prefix}Done — {results[-1]}" if results else "Skill executed."
+                    # Naturalize skill result for voice — raw tool output is robotic
+                    _raw = results[-1] if results else ""
+                    try:
+                        _skill_response = self.quick_chat(
+                            f"The task '{user_input}' completed. Result: {_raw}. "
+                            f"Give a brief natural spoken confirmation (1 sentence)."
+                        )
+                        if not _skill_response or len(_skill_response) < 5:
+                            _skill_response = f"{_prefix}Done — {_raw}"
+                    except Exception:
+                        _skill_response = f"{_prefix}Done — {_raw}"
                     self._ctx.append({"role": "assistant", "content": _skill_response})
                     self._ctx.trim()
                     return _skill_response
