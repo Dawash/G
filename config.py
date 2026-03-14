@@ -149,7 +149,8 @@ def validate_config(config):
         logging.info("Removing plaintext api_key from config (encrypted version exists)")
         config.pop("api_key", None)
 
-    if not has_key and not has_enc:
+    provider = config.get("provider", "ollama").lower()
+    if not has_key and not has_enc and provider != "ollama":
         errors.append("Missing API key: need 'api_key' or 'api_key_encrypted'")
 
     return (len(errors) == 0, errors)

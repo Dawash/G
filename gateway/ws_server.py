@@ -95,7 +95,7 @@ class GatewayServer:
         from gateway.protocol import parse_message, response_msg, error_msg
 
         client_id = id(websocket)
-        authenticated = not self._token  # No token = no auth required
+        authenticated = not bool(self._token)  # Empty/None token = no auth required (dev mode)
 
         logger.info(f"Gateway client connected: {client_id}")
         self._clients.add(websocket)
@@ -112,7 +112,7 @@ class GatewayServer:
 
                 # Authentication
                 if msg_type == "auth":
-                    if msg.get("token") == self._token or not self._token:
+                    if self._token and msg.get("token") == self._token or not self._token:
                         authenticated = True
                         await websocket.send(response_msg(msg_id, "Authenticated"))
                     else:

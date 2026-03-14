@@ -510,10 +510,12 @@ def detect_intent(user_input, provider_name=None, api_key=None,
     # Try to split on "and" for multi-action commands
     # e.g., "open YouTube and search for music" -> two actions
     if " and " in user_input.lower():
-        parts = re.split(r"\s+and\s+", user_input, maxsplit=1, flags=re.IGNORECASE)
+        parts = re.split(r"\s+and\s+(?:then\s+)?", user_input, maxsplit=1, flags=re.IGNORECASE)
         if len(parts) == 2:
             intent1, data1 = _keyword_detect(parts[0].strip())
-            intent2, data2 = _keyword_detect(parts[1].strip())
+            # Strip leading "then" from second part
+            part2 = re.sub(r"^then\s+", "", parts[1].strip(), flags=re.IGNORECASE)
+            intent2, data2 = _keyword_detect(part2)
             # Only split if both parts are real actions (not both chat)
             if intent1 != INTENT_CHAT or intent2 != INTENT_CHAT:
                 actions = []

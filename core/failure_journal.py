@@ -263,6 +263,12 @@ class FailureJournal:
             self._conn.commit()
             row_id = cursor.lastrowid
             logger.info(f"Failure recorded #{row_id}: [{error_class}] {goal[:60]}")
+            # Auto-prune old entries every 100 inserts to prevent unbounded growth
+            if row_id and row_id % 100 == 0:
+                try:
+                    self.prune_old(max_age_days=30)
+                except Exception:
+                    pass
             return row_id
 
     # -----------------------------------------------------------------
