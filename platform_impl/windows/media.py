@@ -171,8 +171,10 @@ def play_music(action, query=None, app="spotify", last_user_input="", quick_chat
                     webbrowser.open(url)
 
                 time.sleep(6)  # Wait for search results to fully render
-                from computer import _click_first_youtube_video
+                from computer import _click_first_youtube_video, _skip_youtube_ads
                 if _click_first_youtube_video():
+                    # Auto-skip ads after video starts
+                    _skip_youtube_ads()
                     return f"Playing '{query}' on YouTube."
             finally:
                 if _guardian:

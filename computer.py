@@ -511,6 +511,89 @@ def _click_first_youtube_video():
     return False
 
 
+def _skip_youtube_ads():
+    """Skip YouTube ads via CDP. Called after video starts playing.
+
+    Waits a few seconds for ad to load, then skips via button click or
+    fast-forward. Returns True if an ad was skipped.
+    """
+    try:
+        from automation.browser_driver import _check_cdp, _get_active_tab_ws, _send_cdp_command
+    except ImportError:
+        return False
+
+    if not _check_cdp():
+        return False
+
+    ws = _get_active_tab_ws()
+    if not ws:
+        return False
+
+    # Check and skip ads up to 3 times (pre-roll can be 2 ads back-to-back)
+    skipped_any = False
+    for attempt in range(3):
+        time.sleep(2)  # Wait for ad to load / next ad to appear
+
+        js = """
+        (() => {
+            // Click skip button if available
+            const skipSel = '.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, ' +
+                            'button.ytp-ad-skip-button-modern, [class*="skip-button"]';
+            const skipBtns = document.querySelectorAll(skipSel);
+            for (const btn of skipBtns) {
+                if (btn.offsetWidth > 0 && btn.offsetHeight > 0) {
+                    btn.click();
+                    return 'skipped';
+                }
+            }
+            // Text-based skip
+            for (const btn of document.querySelectorAll('button')) {
+                const t = (btn.textContent || '').trim().toLowerCase();
+                if ((t.includes('skip ad') || t === 'skip') && btn.offsetWidth > 0) {
+                    btn.click();
+                    return 'skipped';
+                }
+            }
+            // Fast-forward if ad playing
+            const player = document.querySelector('.html5-video-player');
+            const video = document.querySelector('video');
+            if (player && player.classList.contains('ad-showing') && video && video.duration < 120) {
+                video.currentTime = video.duration;
+                return 'fast-forwarded';
+            }
+            // Close overlay ads
+            const overlay = document.querySelector('.ytp-ad-overlay-close-button');
+            if (overlay && overlay.offsetWidth > 0) {
+                overlay.click();
+                return 'closed-overlay';
+            }
+            // Check if ad is even playing
+            if (player && player.classList.contains('ad-showing')) {
+                return 'ad-playing-no-skip';
+            }
+            return 'no-ad';
+        })()
+        """
+
+        result = _send_cdp_command(ws, "Runtime.evaluate", {
+            "expression": js, "returnByValue": True
+        })
+        if result:
+            value = str(result.get("result", {}).get("value", ""))
+            if value in ("skipped", "fast-forwarded", "closed-overlay"):
+                logger.info(f"YouTube ad skip (attempt {attempt+1}): {value}")
+                skipped_any = True
+                continue  # Check for second ad
+            elif value == "no-ad":
+                break  # No ad, done
+            elif value == "ad-playing-no-skip":
+                # Ad with no skip button yet — wait longer
+                time.sleep(3)
+                continue
+
+    return skipped_any
+
+
 def search_in_app(app_name, query):
     """
     Search within an app or website. Smart priority:

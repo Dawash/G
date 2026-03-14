@@ -112,6 +112,9 @@ class PopupGuardian:
 
     def _check_and_handle(self):
         """Single scan: detect popup and handle it."""
+        # Also check for in-browser ads (YouTube, Spotify, etc.)
+        self._skip_browser_ads()
+
         popup = self._detect_popup()
         if not popup:
             return
@@ -412,6 +415,116 @@ class PopupGuardian:
                 self.speak_fn(msg)
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # In-browser ad skipping (YouTube, Spotify Web, etc.)
+    # ------------------------------------------------------------------
+
+    def _skip_browser_ads(self):
+        """Skip in-browser video ads via CDP JavaScript injection.
+
+        Detects YouTube pre-roll/mid-roll ads and:
+        1. Clicks "Skip Ad" / "Skip Ads" button if available
+        2. If no skip button, fast-forwards the ad to 0s remaining
+        3. Also dismisses overlay ads and banner ads
+        """
+        try:
+            from automation.browser_driver import _check_cdp, _get_active_tab_ws, _send_cdp_command
+        except ImportError:
+            return
+
+        if not _check_cdp():
+            return
+
+        ws = _get_active_tab_ws()
+        if not ws:
+            return
+
+        js_skip_ads = """
+        (() => {
+            const results = [];
+
+            // --- YouTube Ad Skipping ---
+
+            // Strategy 1: Click "Skip Ad" / "Skip Ads" button
+            const skipBtns = document.querySelectorAll(
+                '.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, ' +
+                'button.ytp-ad-skip-button, button.ytp-ad-skip-button-modern, ' +
+                '[class*="skip-button"], .videoAdUiSkipButton'
+            );
+            for (const btn of skipBtns) {
+                if (btn.offsetWidth > 0 && btn.offsetHeight > 0) {
+                    btn.click();
+                    results.push('clicked skip button');
+                }
+            }
+
+            // Also try text-based skip detection
+            const allBtns = document.querySelectorAll('button, [role="button"]');
+            for (const btn of allBtns) {
+                const text = (btn.textContent || '').trim().toLowerCase();
+                if ((text.includes('skip ad') || text.includes('skip ads') ||
+                     text === 'skip') && btn.offsetWidth > 0) {
+                    btn.click();
+                    results.push('clicked skip via text: ' + text);
+                }
+            }
+
+            // Strategy 2: If ad is playing but no skip button, fast-forward it
+            const adOverlay = document.querySelector('.ytp-ad-player-overlay, .ad-showing');
+            const video = document.querySelector('video');
+            if (adOverlay && video && video.duration && video.duration < 120) {
+                // It's a short ad — jump to end
+                if (video.currentTime < video.duration - 0.5) {
+                    video.currentTime = video.duration;
+                    results.push('fast-forwarded ad');
+                }
+            }
+
+            // Check if ad is playing via class on player
+            const player = document.querySelector('.html5-video-player');
+            if (player && player.classList.contains('ad-showing') && video) {
+                if (video.duration && video.duration < 120 && video.currentTime < video.duration - 0.5) {
+                    video.currentTime = video.duration;
+                    results.push('skipped ad via player class');
+                }
+            }
+
+            // Strategy 3: Close overlay/banner ads
+            const overlayClose = document.querySelectorAll(
+                '.ytp-ad-overlay-close-button, .ytp-ad-overlay-close-container, ' +
+                '[class*="ad-overlay-close"], .ytp-ad-text-overlay .ytp-ad-overlay-close-button'
+            );
+            for (const btn of overlayClose) {
+                if (btn.offsetWidth > 0) {
+                    btn.click();
+                    results.push('closed overlay ad');
+                }
+            }
+
+            // Strategy 4: Mute ad if still playing (less intrusive)
+            // Only mute if ad, not if user's video
+            if (player && player.classList.contains('ad-showing') && video && !video.muted) {
+                // Don't mute — user might not want that. Just skip.
+            }
+
+            return results.length > 0 ? results.join(', ') : '';
+        })()
+        """
+
+        try:
+            result = _send_cdp_command(ws, "Runtime.evaluate", {
+                "expression": js_skip_ads,
+                "returnByValue": True,
+            })
+            if result:
+                value = str(result.get("result", {}).get("value", ""))
+                if value:
+                    logger.info(f"PopupGuardian ad-skip: {value}")
+                    with self._lock:
+                        self._dismissed.append(f"browser_ad:{value[:60]}")
+        except Exception as e:
+            logger.debug(f"PopupGuardian ad-skip error: {e}")
 
     def _click_button(self, window_title, button_names):
         """Try to click a button by name using UIA. Returns True if clicked."""
