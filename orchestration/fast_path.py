@@ -964,15 +964,15 @@ def execute_handler(handler_key, arguments, action_registry, reminder_mgr):
             return reminder_mgr.clear_all()
 
         elif handler_key == "play_music":
+            action = arguments.get("action", "play")
             query = arguments.get("query")
-            if not query:
-                return None
+            app = arguments.get("app", "spotify")
             try:
                 from platform_impl.windows.media import play_music
-                result = play_music("play", query, "spotify")
-                return result if result else f"Trying to play {query}."
+                result = play_music(action, query, app)
+                return result if result else (f"Trying to play {query}." if query else "Done.")
             except ImportError:
-                return f"Music playback is not available. Try opening Spotify manually."
+                return f"Music playback is not available."
             except Exception as e:
                 return f"Couldn't play music: {e}"
 

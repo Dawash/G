@@ -25,15 +25,16 @@ def _handle_play_music(arguments, user_input="", quick_chat_fn=None):
     """Play music with query injection from user input if LLM forgot it."""
     if arguments.get("action") in ("play", "play_query", None) and not arguments.get("query"):
         if user_input:
-            # Skip query injection for resume/pause commands (no specific song requested)
-            _is_resume = re.search(r'^(resume|continue|unpause|pause|stop)\s', user_input, re.I)
+            # Skip query injection for resume/control commands (no specific song)
+            _is_control = re.search(r'^(resume|continue|unpause|pause|stop|play|skip|next|previous|mute|unmute)$', user_input.strip(), re.I)
             _is_generic = re.search(r'^(play|start)\s+(the\s+)?music$', user_input, re.I)
-            if not _is_resume and not _is_generic:
-                cleaned = re.sub(r'^(play|listen to|put on|start)\s+', '', user_input, flags=re.I)
+            if not _is_control and not _is_generic:
+                cleaned = re.sub(r'^(play|listen to|put on|start|resume|continue)\s+', '', user_input, flags=re.I)
                 cleaned = re.sub(r'\s+(on|in|using|with|from)\s+(spotify|youtube|browser).*$', '', cleaned, flags=re.I)
                 cleaned = re.sub(r'^(some|a|the|my|me)\s+', '', cleaned, flags=re.I)
                 cleaned = cleaned.strip()
-                if cleaned and len(cleaned) > 1 and cleaned.lower() not in ('music', 'song', 'track'):
+                _SKIP_WORDS = {'music', 'song', 'track', 'play', 'pause', 'resume', 'stop', 'continue', ''}
+                if cleaned and len(cleaned) > 1 and cleaned.lower() not in _SKIP_WORDS:
                     arguments["query"] = cleaned
                     logger.info(f"play_music: injected missing query '{cleaned}' from user input")
     action = arguments.get("action", "play")

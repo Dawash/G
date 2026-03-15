@@ -991,14 +991,15 @@ def _execute_tool_inner(tool_name, arguments, action_registry, reminder_mgr=None
             if arguments.get("action") in ("play", "play_query", None) and not arguments.get("query"):
                 user_input = getattr(execute_tool, '_last_user_input', '')
                 if user_input:
-                    # Extract music terms from user input
                     import re as _re
                     # Remove command words, keep genre/song/artist
-                    cleaned = _re.sub(r'^(play|listen to|put on|start)\s+', '', user_input, flags=_re.I)
+                    cleaned = _re.sub(r'^(play|listen to|put on|start|resume|continue)\s+', '', user_input, flags=_re.I)
                     cleaned = _re.sub(r'\s+(on|in|using|with|from)\s+(spotify|youtube|browser).*$', '', cleaned, flags=_re.I)
                     cleaned = _re.sub(r'^(some|a|the|my|me)\s+', '', cleaned, flags=_re.I)
                     cleaned = cleaned.strip()
-                    if cleaned and len(cleaned) > 1:
+                    # Only inject if there's actual content (not just the command word itself)
+                    _COMMAND_ONLY = {"play", "pause", "resume", "stop", "continue", "music", "song", ""}
+                    if cleaned and cleaned.lower() not in _COMMAND_ONLY and len(cleaned) > 1:
                         arguments["query"] = cleaned
                         logger.info(f"play_music: injected missing query '{cleaned}' from user input")
             action = arguments.get("action", "play")

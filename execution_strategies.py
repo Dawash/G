@@ -922,7 +922,7 @@ _DIRECT_TOOL_PATTERNS = [
      lambda m: {"tool": "play_music", "args": {"action": "pause"}}),
     (r"^(?:resume|continue|unpause)(?:\s+(?:the\s+)?(?:music|song|playing))?$|^play\s+(?:the\s+)?music$|^play$|^continue\s+playing$",
      lambda m: {"tool": "play_music", "args": {"action": "play"}}),
-    (r"(?:next|skip)\s+(?:the\s+)?(?:song|track|music)",
+    (r"(?:next|skip)\s+(?:the\s+|this\s+)?(?:song|track|music)|^skip$|^next$",
      lambda m: {"tool": "play_music", "args": {"action": "next"}}),
     (r"(?:previous|prev|back|last)\s+(?:the\s+)?(?:song|track|music)|^go\s+back$",
      lambda m: {"tool": "play_music", "args": {"action": "previous"}}),

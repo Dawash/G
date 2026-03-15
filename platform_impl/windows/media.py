@@ -351,7 +351,7 @@ def _play_spotify_web(query):
     Returns result string on success, None on failure.
     """
     try:
-        from urllib.parse import quote_plus
+        from urllib.parse import quote, quote_plus
         from automation.browser_driver import (
             browser_navigate, is_cdp_available, _check_cdp,
             _get_active_tab_ws, _send_cdp_command, browser_get_url,
@@ -373,7 +373,7 @@ def _play_spotify_web(query):
         return None
 
     # Navigate to Spotify Web search
-    search_url = f"https://open.spotify.com/search/{quote_plus(query)}"
+    search_url = f"https://open.spotify.com/search/{quote(query)}"
     logger.info(f"Spotify Web: navigating to {search_url}")
     browser_navigate(search_url)
 
