@@ -360,6 +360,22 @@ def run(runtime_state=None):
     threading.Thread(target=start_hotkey_listener, daemon=True).start()
     threading.Thread(target=brain.warm_up, daemon=True).start()
 
+    # Phase 2b: Load plugins (Mycroft-style skill system)
+    try:
+        from plugins.loader import PluginLoader
+        import brain as _brain_mod
+        _plugin_loader = PluginLoader()
+        _plugin_loader.set_brain(brain)
+        _plugin_loader.set_memory(memory)
+        _plugin_loader.set_speak_fn(speak)
+        loaded, errors = _plugin_loader.discover_and_load()
+        _brain_mod._plugin_loader = _plugin_loader
+        if loaded > 0:
+            logger.info(f"Plugins: {loaded} loaded, {errors} errors")
+    except Exception as e:
+        logger.debug(f"Plugin system init: {e}")
+        _plugin_loader = None
+
     ollama_was_down = [False]
     _start_ollama_health_monitor(provider_name, ollama_was_down, ollama_url=ollama_url)
 

@@ -32,6 +32,7 @@ from datetime import datetime
 
 # Cached MemoryStore singleton — avoids leaking SQLite connections
 _memory_store_cache = None
+_plugin_loader = None  # Set by assistant_loop after Brain init
 def _get_memory_store():
     global _memory_store_cache
     if _memory_store_cache is None:
@@ -1293,6 +1294,10 @@ def _execute_tool_inner(tool_name, arguments, action_registry, reminder_mgr=None
         elif tool_name in _get_dynamic_tool_names():
             return execute_dynamic_tool(tool_name, arguments)
 
+        # --- Plugin-provided tools ---
+        elif _plugin_loader and tool_name in _plugin_loader.tool_names:
+            return _plugin_loader.execute_tool(tool_name, arguments)
+
         else:
             return f"Unknown tool: {tool_name}"
 
@@ -2405,6 +2410,20 @@ class Brain:
                     user_input = resolved_input
             except Exception:
                 pass
+
+        # --- PLUGIN INTENT CHECK (runs before LLM, 0ms regex match) ---
+        global _plugin_loader
+        if _plugin_loader:
+            try:
+                plugin_result = _plugin_loader.try_handle(user_input)
+                if plugin_result:
+                    logger.info(f"Plugin handled request: {user_input[:50]}")
+                    self._ctx.append({"role": "user", "content": user_input})
+                    self._ctx.append({"role": "assistant", "content": plugin_result})
+                    self._ctx.trim()
+                    return plugin_result
+            except Exception as e:
+                logger.debug(f"Plugin check error: {e}")
 
         # Skip brain entirely if key is known-dead
         if self._key_dead:
