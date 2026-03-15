@@ -446,6 +446,38 @@ class UserPreferences:
         return "normal"
 
 
+    def save_personal_fact(self, fact_key, fact_value):
+        """Save a personal fact about the user (e.g. 'music_preference' = 'jazz')."""
+        self.store.remember("personal_facts", fact_key.lower(), fact_value)
+
+    def get_personal_context(self):
+        """Build a personal context string from stored facts + preferences + habits.
+
+        This is injected into the LLM system prompt so the assistant
+        remembers things across sessions (e.g. 'user likes jazz').
+        """
+        parts = []
+        # Personal facts
+        facts = self.store.get_category("personal_facts")
+        if facts:
+            for key, val in list(facts.items())[:10]:
+                parts.append(f"- {key}: {val}")
+        # Favorite apps
+        fav = self.get_favorite_apps()
+        if fav:
+            parts.append(f"- Favorite apps: {', '.join(fav[:5])}")
+        # Response style
+        length = self.get_preferred_length()
+        if length != "normal":
+            parts.append(f"- Prefers {length} responses")
+        # Nicknames
+        nicks = self.store.get_category("nicknames")
+        if nicks:
+            nick_str = ", ".join(f'"{k}" = {v}' for k, v in list(nicks.items())[:5])
+            parts.append(f"- Nicknames: {nick_str}")
+        return "\n".join(parts) if parts else ""
+
+
 class HabitTracker:
     """Detect temporal usage patterns."""
 

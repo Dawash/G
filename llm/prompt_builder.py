@@ -127,7 +127,7 @@ def build_brain_system_prompt(username, ainame, detected_language="en",
     now = datetime.now()
     lang_instruction = _build_language_instruction(detected_language)
 
-    # Build preference context
+    # Build preference context + personal memory
     pref_block = ""
     if user_preferences:
         try:
@@ -136,6 +136,10 @@ def build_brain_system_prompt(username, ainame, detected_language="en",
                 pref_block = "\n- User prefers CONCISE responses. Keep answers short and to the point."
             elif style == "detailed":
                 pref_block = "\n- User prefers DETAILED responses. Give thorough explanations."
+            # Inject personal context from persistent memory
+            personal_ctx = user_preferences.get("personal_context", "")
+            if personal_ctx:
+                pref_block += f"\n\nWHAT YOU KNOW ABOUT THE USER (from past conversations):\n{personal_ctx}"
         except Exception:
             pass
 
@@ -176,6 +180,13 @@ def build_brain_system_prompt(username, ainame, detected_language="en",
         f"  - 'fill out the form on this page' → agent_task\n"
         f"  - 'open Chrome, go to Gmail, compose an email' → agent_task\n"
         f"  - Any task requiring clicking buttons, typing in apps, or navigating UI → agent_task\n"
+        f"  - 'book a flight to Paris' / 'find flights from X to Y' → agent_task:\n"
+        f"    1. Navigate to google.com/travel/flights\n"
+        f"    2. Fill in origin (auto-detect from user's location or ask) and destination\n"
+        f"    3. Set dates (ask user if not specified)\n"
+        f"    4. Read the results and present cheapest options to user\n"
+        f"    5. Ask user to confirm before proceeding to booking\n"
+        f"    6. NEVER enter payment details — pause for user takeover at checkout\n"
         f"  DO NOT use agent_task for: simple app open/close, weather, time, music play/pause,\n"
         f"  file operations, terminal commands — use the direct tools above instead.\n\n"
         f"RULES:\n"
