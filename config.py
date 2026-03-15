@@ -42,11 +42,15 @@ PROVIDERS = {
 }
 
 # Logging: rotating file (max 5MB, keep 3 backups), console for warnings+errors
+# Format includes module name for structured per-module debugging
 _file_handler = RotatingFileHandler(
     LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
 )
 _file_handler.setLevel(logging.INFO)
-_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+_file_handler.setFormatter(logging.Formatter(
+    "%(asctime)s [%(name)s] %(levelname)s — %(message)s",
+    datefmt="%H:%M:%S"
+))
 
 # In text mode (subprocess), skip console handler — WARNING/ERROR messages going to
 # stderr fill the stdout PIPE buffer (4KB on Windows), blocking print() after ~8 turns.
@@ -54,8 +58,12 @@ _handlers = [_file_handler]
 if os.environ.get("G_INPUT_MODE", "").lower() != "text":
     _console_handler = logging.StreamHandler()
     _console_handler.setLevel(logging.WARNING)
-    _console_handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+    _console_handler.setFormatter(logging.Formatter("[%(name)s] %(levelname)s — %(message)s"))
     _handlers.append(_console_handler)
+
+# Quiet down noisy third-party loggers
+for _noisy in ("urllib3", "requests", "websocket", "PIL", "httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 logging.basicConfig(
     level=logging.DEBUG,
