@@ -1607,10 +1607,16 @@ class Brain:
         # Emotional / personal (instant empathetic response)
         "im feeling tired": lambda s: "Take a short break! A 10-minute power nap or a quick walk can recharge your energy. Stay hydrated too.",
         "i'm feeling tired": lambda s: "Take a short break! Even just standing up and stretching for a minute can help. Want me to set a break reminder?",
+        "im tired": lambda s: "Take a short break! A quick walk or some water can help recharge you.",
+        "i'm tired": lambda s: "Maybe take a short break? A power nap or some fresh air works wonders.",
         "im bored": lambda s: "How about listening to some music, or I can tell you an interesting fact? You could also try learning something new!",
         "i'm bored": lambda s: "Want me to play some music, tell you a joke, or look up something interesting?",
         "im stressed": lambda s: "Take a deep breath. Try the 4-7-8 technique: breathe in for 4 seconds, hold for 7, exhale for 8. Want me to play some calming music?",
         "i'm stressed": lambda s: "Hey, it's okay. Take a moment to breathe. Would you like me to play some relaxing music or set a break reminder?",
+        "im happy": lambda s: "That's great to hear! Keep the good vibes going!",
+        "i'm happy": lambda s: "Wonderful! Glad you're having a good day!",
+        "im sad": lambda s: "I'm sorry to hear that. Want me to play some uplifting music, or would you like to talk about it?",
+        "i'm sad": lambda s: "Hey, it's okay to feel that way. Would some calming music help? Or I can tell you a joke to lighten the mood.",
         # Common questions
         "what do you know about me": lambda s: f"I know your name is {s.username}. I remember your app usage patterns and preferences from our conversations.",
         "do you remember me": lambda s: f"Of course, {s.username}! I remember our conversations and your preferences.",
