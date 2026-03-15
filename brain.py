@@ -1557,16 +1557,52 @@ class Brain:
             logger.debug(f"Skill library lookup failed: {e}")
         return None
 
-    # Cached responses for frequently asked identity/factual questions
+    # Cached responses for frequently asked questions + greetings
     # These bypass the LLM entirely — instant response (0ms)
+    # On qwen2.5:32b, each LLM call takes 20-40s — caching saves massive time
     _CACHED_RESPONSES = {
+        # Identity
         "who are you": lambda s: f"I'm {s.ainame}, a personal AI assistant created by Dawa Sangay Sherpa. I help you control your computer, find information, and manage your day.",
         "who created you": lambda s: f"Dawa Sangay Sherpa created me. I'm {s.ainame}, your personal AI assistant.",
         "who made you": lambda s: f"I was created by Dawa Sangay Sherpa.",
         "what is your name": lambda s: f"My name is {s.ainame}. I'm your personal AI assistant.",
         "what's your name": lambda s: f"I'm {s.ainame}, nice to meet you!",
-        "are you ai": lambda s: f"Yes, I'm {s.ainame}, an AI assistant created by Dawa Sangay Sherpa. I can help you with all sorts of tasks!",
+        "are you ai": lambda s: f"Yes, I'm {s.ainame}, an AI assistant created by Dawa Sangay Sherpa.",
         "are you a robot": lambda s: f"I'm an AI assistant, not a physical robot. I live on your computer and help you with tasks!",
+        "what can you do": lambda s: f"I can open apps, search the web, play music, check weather, set reminders, manage files, control settings, and much more. Just ask!",
+        # Greetings — instant instead of 20-40s LLM call
+        "hello": lambda s: f"Hello {s.username}! What can I do for you?",
+        "hi": lambda s: f"Hi there! How can I help?",
+        "hey": lambda s: f"Hey! What's up?",
+        "good morning": lambda s: f"Good morning {s.username}! How can I help you today?",
+        "good afternoon": lambda s: f"Good afternoon! What can I do for you?",
+        "good evening": lambda s: f"Good evening! How can I help?",
+        "good night": lambda s: f"Good night {s.username}! Sleep well.",
+        "how are you": lambda s: f"I'm doing great, thanks for asking! Ready to help with anything you need.",
+        "how are you doing": lambda s: f"I'm running smoothly! What can I help you with?",
+        # Gratitude
+        "thank you": lambda s: f"You're welcome! Let me know if you need anything else.",
+        "thanks": lambda s: f"No problem! Happy to help.",
+        "thanks a lot": lambda s: f"You're welcome! Always here to help.",
+        # Farewells (these are also handled by exit detection, but cache provides a response)
+        "goodbye": lambda s: f"Goodbye {s.username}! Have a great day!",
+        "see you later": lambda s: f"See you later! Take care.",
+        "bye": lambda s: f"Bye! Have a great one.",
+        # Common requests that don't need tools
+        "tell me a joke": lambda s: __import__('random').choice([
+            "Why don't scientists trust atoms? Because they make up everything!",
+            "What do you call a bear with no teeth? A gummy bear!",
+            "Why did the scarecrow win an award? He was outstanding in his field!",
+            "What do you call a fake noodle? An impasta!",
+            "Why don't eggs tell jokes? They'd crack each other up!",
+            "What did the ocean say to the beach? Nothing, it just waved.",
+            "Why did the bicycle fall over? Because it was two tired!",
+        ]),
+        "tell me another joke": lambda s: __import__('random').choice([
+            "What do you call a lazy kangaroo? A pouch potato!",
+            "Why don't skeletons fight each other? They don't have the guts!",
+            "What did one wall say to the other? I'll meet you at the corner!",
+        ]),
     }
 
     def _try_direct_dispatch(self, user_input):
@@ -1580,8 +1616,14 @@ class Brain:
         if not user_input or not user_input.strip():
             return None
 
-        # Instant cached responses for identity questions (0ms, no LLM)
+        # Instant cached responses for greetings + identity (0ms, no LLM)
         _lower = user_input.lower().strip().rstrip("?!.")
+        # Strip common prefixes: "hey g", "ok g", "please"
+        import re as _re_cache
+        _clean = _re_cache.sub(r'^(?:hey |ok |please |can you |could you )', '', _lower).strip()
+        _clean = _re_cache.sub(r'^' + self.ainame.lower() + r'\s*,?\s*', '', _clean).strip()
+        if _clean in self._CACHED_RESPONSES:
+            return self._CACHED_RESPONSES[_clean](self)
         if _lower in self._CACHED_RESPONSES:
             return self._CACHED_RESPONSES[_lower](self)
 
@@ -3329,20 +3371,27 @@ class Brain:
         except Exception as e:
             logger.warning(f"Ollama warm-up failed: {e}")
 
-        # Vision model (llava) — warm up in separate thread since it's rarely needed
-        def _warm_llava():
+        # Unload other models to free VRAM for the main model
+        # On GPUs with limited VRAM, multiple loaded models cause swapping
+        def _cleanup_models():
             try:
-                requests.post(
-                    f"{self.ollama_url}/api/generate",
-                    json={"model": "llava", "prompt": "", "keep_alive": -1},
-                    timeout=30,
-                )
-                logger.info("Ollama llava warm-up complete")
+                resp = requests.get(f"{self.ollama_url}/api/ps", timeout=5)
+                if resp.status_code == 200:
+                    running = resp.json().get("models", [])
+                    for m in running:
+                        m_name = m.get("name", "")
+                        if m_name and m_name != self.ollama_model and "llava" not in m_name:
+                            logger.info(f"Unloading unused model: {m_name}")
+                            requests.post(
+                                f"{self.ollama_url}/api/generate",
+                                json={"model": m_name, "keep_alive": 0},
+                                timeout=10,
+                            )
             except Exception:
-                pass  # llava is optional
+                pass
 
         import threading
-        threading.Thread(target=_warm_llava, daemon=True).start()
+        threading.Thread(target=_cleanup_models, daemon=True).start()
 
     def quick_chat(self, prompt):
         """Quick single-turn LLM call for generating natural responses. No tools, no history."""
