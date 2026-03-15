@@ -1940,22 +1940,46 @@ class Brain:
                 'july 4th': (7, 4, 'Independence Day (July 4)'),
             }
             _hol = _HOLIDAYS.get(_holiday_query)
+            _month, _day, _label = None, None, None
             if _hol:
                 _month, _day, _label = _hol
+            else:
+                # Try parsing arbitrary dates: "march 20", "april 15", "december 1"
+                _MONTHS = {
+                    'january': 1, 'february': 2, 'march': 3, 'april': 4,
+                    'may': 5, 'june': 6, 'july': 7, 'august': 8,
+                    'september': 9, 'october': 10, 'november': 11, 'december': 12,
+                    'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4,
+                    'jun': 6, 'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+                }
+                _date_m = _re.search(r'(\w+)\s+(\d{1,2})', _holiday_query)
+                if _date_m and _date_m.group(1) in _MONTHS:
+                    _month = _MONTHS[_date_m.group(1)]
+                    _day = int(_date_m.group(2))
+                    _label = f"{_date_m.group(1).capitalize()} {_day}"
+                # Also try "20 march", "15th april"
+                if not _month:
+                    _date_m2 = _re.search(r'(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(\w+)', _holiday_query)
+                    if _date_m2 and _date_m2.group(2) in _MONTHS:
+                        _day = int(_date_m2.group(1))
+                        _month = _MONTHS[_date_m2.group(2)]
+                        _label = f"{_date_m2.group(2).capitalize()} {_day}"
+            if _month and _day and _label:
                 _today = _date_cls.today()
-                _target = _date_cls(_today.year, _month, _day)
-                if _target < _today:
-                    _target = _date_cls(_today.year + 1, _month, _day)
-                _delta = (_target - _today).days
-                if _delta == 0:
-                    logger.info(f"Direct dispatch: days-until fast-path ({_label} is today!)")
-                    return f"{_label} is today!"
-                elif _delta == 1:
-                    logger.info(f"Direct dispatch: days-until fast-path ({_label} is tomorrow!)")
-                    return f"{_label} is tomorrow!"
+                try:
+                    _target = _date_cls(_today.year, _month, _day)
+                except ValueError:
+                    pass  # invalid date like Feb 30
                 else:
-                    logger.info(f"Direct dispatch: days-until fast-path ({_delta} days until {_label})")
-                    return f"There are {_delta} days until {_label}."
+                    if _target < _today:
+                        _target = _date_cls(_today.year + 1, _month, _day)
+                    _delta = (_target - _today).days
+                    if _delta == 0:
+                        return f"{_label} is today!"
+                    elif _delta == 1:
+                        return f"{_label} is tomorrow!"
+                    else:
+                        return f"There are {_delta} days until {_label}."
 
         # --- Math fast-path: "what is 2+2", "999 times 999", "2 to the power of 10" ---
         # Pre-process word-form operators into symbols
