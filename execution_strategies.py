@@ -920,11 +920,11 @@ _DIRECT_TOOL_PATTERNS = [
     # Music/volume control — direct media key dispatch
     (r"^(?:pause|stop)(?:\s+(?:the\s+)?(?:music|song|track))?$",
      lambda m: {"tool": "play_music", "args": {"action": "pause"}}),
-    (r"^(?:resume|continue|unpause)(?:\s+(?:the\s+)?music)?$|^play\s+(?:the\s+)?music$",
+    (r"^(?:resume|continue|unpause)(?:\s+(?:the\s+)?(?:music|song|playing))?$|^play\s+(?:the\s+)?music$|^play$|^continue\s+playing$",
      lambda m: {"tool": "play_music", "args": {"action": "play"}}),
     (r"(?:next|skip)\s+(?:the\s+)?(?:song|track|music)",
      lambda m: {"tool": "play_music", "args": {"action": "next"}}),
-    (r"(?:previous|prev|back)\s+(?:the\s+)?(?:song|track|music)",
+    (r"(?:previous|prev|back|last)\s+(?:the\s+)?(?:song|track|music)|^go\s+back$",
      lambda m: {"tool": "play_music", "args": {"action": "previous"}}),
     # Volume/mute — single word, "volume up/down", natural speech
     (r"^mute$",
