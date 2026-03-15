@@ -1604,6 +1604,28 @@ class Brain:
             "Why don't skeletons fight each other? They don't have the guts!",
             "What did one wall say to the other? I'll meet you at the corner!",
         ]),
+        # Emotional / personal (instant empathetic response)
+        "im feeling tired": lambda s: "Take a short break! A 10-minute power nap or a quick walk can recharge your energy. Stay hydrated too.",
+        "i'm feeling tired": lambda s: "Take a short break! Even just standing up and stretching for a minute can help. Want me to set a break reminder?",
+        "im bored": lambda s: "How about listening to some music, or I can tell you an interesting fact? You could also try learning something new!",
+        "i'm bored": lambda s: "Want me to play some music, tell you a joke, or look up something interesting?",
+        "im stressed": lambda s: "Take a deep breath. Try the 4-7-8 technique: breathe in for 4 seconds, hold for 7, exhale for 8. Want me to play some calming music?",
+        "i'm stressed": lambda s: "Hey, it's okay. Take a moment to breathe. Would you like me to play some relaxing music or set a break reminder?",
+        # Common questions
+        "what do you know about me": lambda s: f"I know your name is {s.username}. I remember your app usage patterns and preferences from our conversations.",
+        "do you remember me": lambda s: f"Of course, {s.username}! I remember our conversations and your preferences.",
+        "are you there": lambda s: "Yes, I'm here! What do you need?",
+        "are you listening": lambda s: "Yes, I'm listening! Go ahead.",
+        "never mind": lambda s: "No worries! Let me know if you need anything.",
+        "nevermind": lambda s: "Alright! I'm here whenever you need me.",
+        "cancel": lambda s: "Cancelled. What else can I help with?",
+        "nothing": lambda s: "Okay! I'm here whenever you need me.",
+        "ok": lambda s: "Got it!",
+        "okay": lambda s: "Alright!",
+        "cool": lambda s: "Glad to help!",
+        "nice": lambda s: "Thanks!",
+        "great": lambda s: "Awesome! Anything else?",
+        "awesome": lambda s: "Glad you think so!",
     }
 
     def _try_direct_dispatch(self, user_input):
