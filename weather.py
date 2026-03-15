@@ -262,6 +262,8 @@ def get_current_weather(city=None):
     """
     location = _get_location(city)
     if not location:
+        if city:
+            return f"I couldn't find a location called '{city}'. Try a real city name like 'weather in Berlin'."
         return ("I couldn't detect your location — maybe VPN is blocking it. "
                 "Try 'weather in Berlin' or set your city in config.json.")
 
@@ -324,6 +326,8 @@ def get_forecast(city=None):
     """
     location = _get_location(city)
     if not location:
+        if city:
+            return f"I couldn't find '{city}'. Try a real city name like 'forecast for London'."
         return "Can't get the forecast — set your city in config.json."
 
     try:

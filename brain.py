@@ -636,10 +636,17 @@ def _friendly_error(error_text, user_input="", tool_name=""):
 
 
 def _is_error_result(result):
-    """Check if a tool result string represents an error."""
+    """Check if a tool result string represents an error that needs wrapping.
+
+    Returns False for results that already contain user-friendly messages
+    (e.g., "I couldn't find a location called 'xyz'. Try...")
+    """
     if not result:
         return False
     lower = str(result).lower()
+    # Already user-friendly — contains advice like "try", "did you mean", "make sure"
+    if any(w in lower for w in ["try ", "did you mean", "make sure", "would you like"]):
+        return False
     return any(w in lower for w in [
         "error", "failed", "not found", "couldn't", "timed out",
         "timeout", "blocked", "denied", "unable", "could not",

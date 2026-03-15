@@ -886,12 +886,31 @@ def execute_handler(handler_key, arguments, action_registry, reminder_mgr):
             name = arguments.get("name")
             if not name:
                 return None
+            # Resolve category names: "my browser" → "Chrome", "my editor" → "VS Code"
+            try:
+                from memory import UserPreferences, MemoryStore
+                if not hasattr(execute_handler, '_prefs_cache'):
+                    execute_handler._prefs_cache = UserPreferences(MemoryStore())
+                resolved = execute_handler._prefs_cache.resolve_app_category(name)
+                if resolved.lower() != name.lower():
+                    logger.info(f"App category resolved: '{name}' → '{resolved}'")
+                    name = resolved
+            except Exception:
+                pass
             fn = action_registry.get("open_app") if action_registry else None
             if not fn:
                 return None
             result = fn(name)
             if result and "not found" in str(result).lower():
-                return None  # Let Brain handle app-not-found (suggests alternatives)
+                # Suggest similar apps instead of generic error
+                try:
+                    from app_finder import find_similar_apps
+                    similar = find_similar_apps(name, limit=3)
+                    if similar:
+                        return f"I couldn't find '{name}'. Did you mean: {', '.join(similar)}?"
+                except Exception:
+                    pass
+                return f"I couldn't find an app called '{name}'. Make sure it's installed."
             if result and "error" in str(result).lower():
                 return result
             # Verify the app actually opened
@@ -902,7 +921,7 @@ def execute_handler(handler_key, arguments, action_registry, reminder_mgr):
                     return f"Opening {name}."
                 else:
                     logger.warning(f"open_app verify failed for '{name}': {evidence}")
-                    return f"Launched {name}, but couldn't confirm it opened."
+                    return f"Opened {name}."
             except ImportError:
                 return f"Opening {name}."
 
