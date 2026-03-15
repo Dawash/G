@@ -668,6 +668,17 @@ def run(runtime_state=None):
             memory.log_event(session_id, "self_test", {"result": result[:200]})
             continue
 
+        # ----- LAYER 1.5: Plugin intents (before fast-path, 0ms regex) -----
+        if _plugin_loader:
+            try:
+                _plugin_result = _plugin_loader.try_handle(user_input)
+                if _plugin_result:
+                    _ss.last_response = str(_plugin_result)
+                    _say(ainame, _plugin_result)
+                    continue
+            except Exception:
+                pass
+
         # ----- LAYER 2a: Fast-path routing (deterministic, no LLM) -----
         # try_fast_path handles both single and multi-step commands
         # ("open Chrome and check weather" → two fast-path actions)
