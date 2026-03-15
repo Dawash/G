@@ -752,17 +752,25 @@ def run(runtime_state=None):
         if is_connected and _brain_available and not _api_limited() and not brain.key_is_dead:
             logging.info(f"Brain processing: '{user_input}'")
 
-            # Scale timeout by model size — 32b needs 40s per LLM round
+            # Scale timeout by model size + task complexity
             _model_name = getattr(brain, 'ollama_model', '') or ''
             _model_lower = _model_name.lower()
             if any(s in _model_lower for s in ("72b", "70b")):
-                _BRAIN_TIMEOUT = 300
+                _base_timeout = 300
             elif any(s in _model_lower for s in ("32b", "34b", "27b")):
-                _BRAIN_TIMEOUT = 180
+                _base_timeout = 180
             elif any(s in _model_lower for s in ("14b", "13b")):
-                _BRAIN_TIMEOUT = 90
+                _base_timeout = 90
             else:
-                _BRAIN_TIMEOUT = 60  # 7b and smaller
+                _base_timeout = 60
+            # Complex tasks get 50% more time (create, book, agent-level commands)
+            _ui_lower = user_input.lower()
+            _is_complex = any(w in _ui_lower for w in [
+                "create", "build", "make", "generate", "write",
+                "book", "order", "search and", "and then",
+                "agent", "automate",
+            ])
+            _BRAIN_TIMEOUT = int(_base_timeout * 1.5) if _is_complex else _base_timeout
             # Dynamic acknowledgment: longer delay for simple queries (likely fast), shorter for complex
             _ack_delay = 4.0 if len(user_input.split()) <= 5 else 2.5
             import random as _rnd

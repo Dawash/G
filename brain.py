@@ -1557,6 +1557,18 @@ class Brain:
             logger.debug(f"Skill library lookup failed: {e}")
         return None
 
+    # Cached responses for frequently asked identity/factual questions
+    # These bypass the LLM entirely — instant response (0ms)
+    _CACHED_RESPONSES = {
+        "who are you": lambda s: f"I'm {s.ainame}, a personal AI assistant created by Dawa Sangay Sherpa. I help you control your computer, find information, and manage your day.",
+        "who created you": lambda s: f"Dawa Sangay Sherpa created me. I'm {s.ainame}, your personal AI assistant.",
+        "who made you": lambda s: f"I was created by Dawa Sangay Sherpa.",
+        "what is your name": lambda s: f"My name is {s.ainame}. I'm your personal AI assistant.",
+        "what's your name": lambda s: f"I'm {s.ainame}, nice to meet you!",
+        "are you ai": lambda s: f"Yes, I'm {s.ainame}, an AI assistant created by Dawa Sangay Sherpa. I can help you with all sorts of tasks!",
+        "are you a robot": lambda s: f"I'm an AI assistant, not a physical robot. I live on your computer and help you with tasks!",
+    }
+
     def _try_direct_dispatch(self, user_input):
         """Direct mode: handle simple requests without LLM (0ms latency).
 
@@ -1567,6 +1579,11 @@ class Brain:
         """
         if not user_input or not user_input.strip():
             return None
+
+        # Instant cached responses for identity questions (0ms, no LLM)
+        _lower = user_input.lower().strip().rstrip("?!.")
+        if _lower in self._CACHED_RESPONSES:
+            return self._CACHED_RESPONSES[_lower](self)
 
         try:
             from execution_strategies import (
