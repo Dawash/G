@@ -6,6 +6,7 @@ Extracted from: brain.py Brain._sanitize_response(), Brain._is_llm_refusal(),
 
 Responsibility:
   - Sanitize LLM output (strip special tokens, code fences, markdown artifacts)
+  - Strip non-Latin script leaks (CJK, Cyrillic) before TTS
   - Detect LLM refusal patterns ("I'm an AI, I can't...")
   - Suggest correct tool when LLM refuses to use tools
 """
@@ -14,6 +15,93 @@ import re
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Non-Latin script stripping (CJK / Cyrillic leak from qwen2.5)
+# ---------------------------------------------------------------------------
+
+# Regex matching contiguous runs of characters in scripts we want to strip.
+# Covers: CJK Unified Ideographs, CJK Extension A/B, CJK Compatibility,
+#         Hiragana, Katakana, Hangul, Cyrillic, Arabic, Thai, Devanagari,
+#         and assorted CJK punctuation / fullwidth forms.
+#
+# Deliberately EXCLUDES:
+#   - Basic Latin (U+0020-007F)
+#   - Latin Extended-A/B and Latin Supplement (U+0080-024F) — accented chars
+#   - General punctuation, currency symbols, math symbols
+#   - Common emoji ranges (left alone; TTS ignores them)
+_NON_LATIN_RANGES = (
+    r'[\u2E80-\u2FDF'   # CJK Radicals Supplement, Kangxi Radicals
+    r'\u3000-\u303F'     # CJK Symbols and Punctuation (ideographic comma, etc.)
+    r'\u3040-\u309F'     # Hiragana
+    r'\u30A0-\u30FF'     # Katakana
+    r'\u3100-\u312F'     # Bopomofo
+    r'\u3130-\u318F'     # Hangul Compatibility Jamo
+    r'\u3200-\u32FF'     # Enclosed CJK Letters
+    r'\u3300-\u33FF'     # CJK Compatibility
+    r'\u3400-\u4DBF'     # CJK Unified Ideographs Extension A
+    r'\u4E00-\u9FFF'     # CJK Unified Ideographs
+    r'\uA960-\uA97F'     # Hangul Jamo Extended-A
+    r'\uAC00-\uD7AF'     # Hangul Syllables
+    r'\uD7B0-\uD7FF'     # Hangul Jamo Extended-B
+    r'\uF900-\uFAFF'     # CJK Compatibility Ideographs
+    r'\uFE30-\uFE4F'     # CJK Compatibility Forms
+    r'\uFF00-\uFFEF'     # Fullwidth Forms (fullwidth Latin, halfwidth Katakana)
+    r'\u0400-\u04FF'     # Cyrillic
+    r'\u0500-\u052F'     # Cyrillic Supplement
+    r'\u0600-\u06FF'     # Arabic
+    r'\u0900-\u097F'     # Devanagari
+    r'\u0E00-\u0E7F'     # Thai
+    r']'
+)
+
+_RE_NON_LATIN = re.compile(_NON_LATIN_RANGES + r'+')
+
+
+def sanitize_for_speech(text):
+    """Strip non-English/non-Latin characters from LLM text before TTS.
+
+    qwen2.5 randomly injects Chinese (CJK) mid-sentence into English
+    responses.  This function removes those sequences so TTS only speaks
+    intelligible text.
+
+    Preserves:
+      - ASCII letters, digits, punctuation, whitespace
+      - Accented Latin characters (cafe, naive, Dusseldorf)
+      - URLs and file paths (no CJK in those normally)
+      - Numbers that were adjacent to CJK (e.g. "12" in "预计12英寸" -> "12")
+
+    Args:
+        text: Raw LLM response string.
+
+    Returns:
+        Cleaned string safe for English TTS, or empty string if input was
+        None/empty.
+    """
+    if not text:
+        return text or ""
+
+    # Strip all non-Latin script runs
+    cleaned = _RE_NON_LATIN.sub(' ', text)
+
+    # Clean up artifacts left by stripping:
+    #   - Multiple consecutive spaces
+    cleaned = re.sub(r'  +', ' ', cleaned)
+    #   - Space before punctuation: "Hello , world" -> "Hello, world"
+    cleaned = re.sub(r'\s+([.,;:!?\)])', r'\1', cleaned)
+    #   - Space after opening paren: "( hello" -> "(hello"
+    cleaned = re.sub(r'(\()\s+', r'\1', cleaned)
+    #   - Repeated punctuation: ",," or ",, " or ". ." -> single punctuation
+    cleaned = re.sub(r'([.,;:!?])\s*\1+', r'\1', cleaned)
+    #   - Orphaned punctuation at start of text or after whitespace
+    cleaned = re.sub(r'(?:^|(?<=\s))[.,;:!?]+(?=\s|$)', '', cleaned)
+    #   - Leading/trailing whitespace per line
+    cleaned = '\n'.join(line.strip() for line in cleaned.split('\n'))
+    #   - Collapse multiple spaces again after all cleanup
+    cleaned = re.sub(r'  +', ' ', cleaned)
+
+    return cleaned.strip()
 
 
 def sanitize_response(text):

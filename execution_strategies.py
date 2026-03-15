@@ -621,6 +621,8 @@ _KNOWN_WEBSITES = {
     "hacker news": "https://news.ycombinator.com", "bing": "https://www.bing.com",
     "prime video": "https://www.primevideo.com", "disney plus": "https://www.disneyplus.com",
     "hulu": "https://www.hulu.com", "soundcloud": "https://soundcloud.com",
+    "google flights": "https://www.google.com/travel/flights",
+    "flights": "https://www.google.com/travel/flights",
 }
 
 
@@ -874,6 +876,14 @@ _DIRECT_TOOL_PATTERNS = [
     # "play X on youtube"
     (r"play\s+(.+?)\s+on\s+youtube",
      lambda m: {"tool": "play_music", "args": {"action": "play_query", "query": m.group(1).strip(), "app": "youtube"}}),
+
+    # Flight booking — route to agent_task with Google Flights URL
+    # "book a flight to Paris", "find flights to Tokyo", "cheapest flights to London"
+    (r"(?:book|find|search|get|look\s+(?:for|up))\s+(?:for\s+)?(?:me\s+)?(?:a\s+)?(?:cheap|cheapest|best|direct)?\s*flights?\s+(?:from\s+(.+?)\s+)?to\s+(.+?)(?:\s+(?:for me|please|now))*$",
+     lambda m: {"tool": "agent_task", "args": {"goal": f"Go to https://www.google.com/travel/flights and search for flights{' from ' + m.group(1).strip() if m.group(1) else ''} to {m.group(2).strip()}. Read the results and present the cheapest options to the user. NEVER enter payment details — pause for user at checkout."}}),
+    # "flights from X to Y", "flights to X" (bare noun form)
+    (r"^(?:cheap|cheapest|best|direct)?\s*flights?\s+(?:from\s+(.+?)\s+)?to\s+(.+?)(?:\s+(?:for me|please|now))*$",
+     lambda m: {"tool": "agent_task", "args": {"goal": f"Go to https://www.google.com/travel/flights and search for flights{' from ' + m.group(1).strip() if m.group(1) else ''} to {m.group(2).strip()}. Read the results and present the cheapest options to the user. NEVER enter payment details — pause for user at checkout."}}),
 
     # Search — only simple searches, not compound or site-specific
     (r"^(?:search|google)\s+(?:for\s+)?(.+)$",

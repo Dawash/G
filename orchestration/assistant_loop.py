@@ -50,6 +50,7 @@ from orchestration.session_manager import (
     startup_greeting, should_auto_sleep, do_provider_switch,
 )
 from orchestration.response_dispatcher import say, llm_response, truncate_for_speech
+from llm.response_builder import sanitize_for_speech
 from orchestration.fallback_router import build_action_map
 from orchestration.fast_path import match_fast_path, execute_handler, try_fast_path
 from core.control_flags import (
@@ -702,9 +703,33 @@ def run(runtime_state=None):
         if provider_name == "ollama":
             try:
                 from ai_providers import check_ollama_health
-                if not check_ollama_health(ollama_url=ollama_url):
+                # Force a fresh health check to catch mid-session Ollama crashes
+                # quickly (5s timeout) instead of hanging for 60-180s in brain.think()
+                if not check_ollama_health(force=True, ollama_url=ollama_url):
                     _brain_available = False
                     ollama_was_down[0] = True
+                    # Give the user immediate feedback instead of silent fallthrough
+                    speak_async("Ollama seems to be offline. Using basic commands only.")
+                    logger.warning("Ollama health check failed (force=True) — using intent fallback")
+                    # Try intent-based keyword detection for offline-capable commands
+                    _offline_intents = detect_intent(user_input, provider_name=provider_name,
+                                                     api_key=api_key, use_ai=False)
+                    _offline_handled = False
+                    for _oi_intent, _oi_data in _offline_intents:
+                        if _oi_intent == INTENT_CHAT:
+                            continue  # Can't handle chat without LLM
+                        handler = action_map.get(_oi_intent)
+                        if handler:
+                            _oi_result = handler(_oi_data) if _oi_data else handler()
+                            if _oi_result:
+                                _say(ainame, str(_oi_result))
+                                _offline_handled = True
+                                break
+                    if _offline_handled:
+                        continue
+                    _say(ainame, "I can't process that without the AI model. "
+                         "Basic commands like time, weather, and app control still work.")
+                    continue
             except Exception:
                 pass
 
@@ -749,7 +774,12 @@ def run(runtime_state=None):
                     _debug_trace(f"Loop#{interaction_count} TIMEOUT after {_BRAIN_TIMEOUT}s")
                     # Signal Brain to stop between tool rounds
                     brain._cancelled = True
-                    response = "Sorry, that took too long. Could you try again?"
+                    # Use friendly error for natural timeout message
+                    from brain import _friendly_error
+                    response = _friendly_error(
+                        f"Brain timed out after {_BRAIN_TIMEOUT}s",
+                        user_input=user_input,
+                    )
                 finally:
                     _pool.shutdown(wait=False)
                 _elapsed = time.time() - _t0
@@ -776,7 +806,7 @@ def run(runtime_state=None):
                 _ack_timer.cancel()
 
             if response and str(response).strip():
-                _ss.last_response = str(response)
+                # Check __RESTART__ on raw response before sanitizing
                 if "__RESTART__" in str(response):
                     _say(ainame, _llm_response(brain, "assistant is about to restart, say a quick goodbye",
                                                user_input, uname, fast_key="restart"))
@@ -788,6 +818,14 @@ def run(runtime_state=None):
                     _restart_process()
                     break
 
+                # Strip non-Latin script leaks (CJK/Cyrillic from qwen2.5)
+                # before the response is spoken or stored for "repeat"
+                response = sanitize_for_speech(str(response))
+                if not response.strip():
+                    # Entire response was non-Latin garbage — skip
+                    continue
+
+                _ss.last_response = response
                 _debug_trace(f"Loop#{interaction_count} pre-say")
                 # Use streaming TTS: first sentence starts playing immediately
                 # while memory logging happens in parallel

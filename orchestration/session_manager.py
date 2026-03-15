@@ -16,6 +16,7 @@ import os
 import sys
 import logging
 from datetime import datetime
+from llm.response_builder import sanitize_for_speech
 from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
@@ -99,7 +100,10 @@ def _summarize_news(headlines):
             )
             summary = provider.chat(prompt)
             if summary and len(summary) > 20:
-                return f"Quick news update: {summary.strip()}"
+                # Strip CJK/Cyrillic leaks from qwen2.5 news summaries
+                summary = sanitize_for_speech(summary.strip())
+                if summary and len(summary) > 10:
+                    return f"Quick news update: {summary}"
     except Exception:
         pass
 

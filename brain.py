@@ -789,6 +789,10 @@ def execute_tool(tool_name, arguments, action_registry, reminder_mgr=None, speak
                             pass
                     return agent_result
 
+        # Friendly error conversion: raw tool errors → natural spoken messages
+        if result and _is_error_result(result):
+            result = _friendly_error(str(result), user_input=user_input, tool_name=tool_name)
+
         return result
 
     # --- Legacy path for non-registry tools ---
@@ -876,6 +880,11 @@ def execute_tool(tool_name, arguments, action_registry, reminder_mgr=None, speak
                     except Exception:
                         pass
                 return agent_result
+
+    # Friendly error conversion: raw tool errors → natural spoken messages
+    if result and _is_error_result(result):
+        user_input = getattr(execute_tool, '_last_user_input', '')
+        result = _friendly_error(str(result), user_input=user_input, tool_name=tool_name)
 
     return result
 
@@ -2720,6 +2729,12 @@ class Brain:
             # into a clean user→assistant pair. Prevents context pollution
             # from multi-round tool chains (play_music→click_at→etc.)
             self._collapse_completed_turn(result)
+
+            # Friendly error conversion: if the final result is an error,
+            # convert it to a natural spoken message before returning to the user
+            if result and _is_error_result(result):
+                result = _friendly_error(str(result), user_input=user_input)
+
             return result
 
         except requests.HTTPError as e:
