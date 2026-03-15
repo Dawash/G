@@ -32,6 +32,12 @@ _VAGUE_MUSIC = {
     "good songs", "nice songs", "good song", "nice song",
     "good", "nice", "best", "great", "cool",
     "vibe", "vibes", "music", "a song", "song",
+    # Natural speech variants often from STT
+    "some good music", "some good songs", "some good song",
+    "some nice music", "some nice songs", "a good song",
+    "some cool music", "some great music", "something cool",
+    "something relaxing", "something upbeat", "something chill",
+    "something to listen to", "some tunes", "some jams",
 }
 
 # Genre keywords that need expansion to specific songs
@@ -85,8 +91,12 @@ def play_music(action, query=None, app="spotify", last_user_input="", quick_chat
     # Expand vague/genre queries into specific songs
     if action in ("play", "play_query") and query:
         q_lower = query.lower().strip()
-        q_base = re.sub(r'\s*(music|songs?|playlist|mix)\s*$', '', q_lower).strip()
-        is_vague = q_lower in _VAGUE_MUSIC or q_base in _GENRE_WORDS or len(q_base) <= 3
+        # Strip leading filler words: "some", "a", "any", "me", "me some", "me a"
+        q_cleaned = re.sub(r'^(?:some|a|any|me\s+(?:some|a)?)\s+', '', q_lower).strip()
+        q_base = re.sub(r'\s*(music|songs?|playlist|mix|tracks?)\s*$', '', q_cleaned).strip()
+        is_vague = (q_lower in _VAGUE_MUSIC or q_cleaned in _VAGUE_MUSIC
+                    or q_base in _VAGUE_MUSIC or q_base in _GENRE_WORDS
+                    or len(q_base) <= 3)
         if is_vague and quick_chat_fn:
             try:
                 suggestion = quick_chat_fn(
