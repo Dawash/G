@@ -170,7 +170,20 @@ def play_music(action, query=None, app="spotify", last_user_input="", quick_chat
                     import webbrowser
                     webbrowser.open(url)
 
-                time.sleep(6)  # Wait for search results to fully render
+                # Poll for YouTube page readiness (up to 8s) instead of fixed sleep
+                for _yt_wait in range(8):
+                    time.sleep(1)
+                    try:
+                        _yt_ws = _get_active_tab_ws(url_contains="youtube.com")
+                        if _yt_ws:
+                            _yt_check = _send_cdp_command(_yt_ws, "Runtime.evaluate", {
+                                "expression": "document.readyState",
+                                "returnByValue": True
+                            })
+                            if _yt_check and "complete" in str(_yt_check.get("result", {}).get("value", "")):
+                                break
+                    except Exception:
+                        pass
                 from computer import _click_first_youtube_video, _skip_youtube_ads
                 if _click_first_youtube_video():
                     # Auto-skip ads after video starts

@@ -61,8 +61,20 @@ def _tokenize(text):
     return [w for w in words if w not in _STOP_WORDS and len(w) > 1]
 
 
-def _tfidf_similarity(query_tokens, doc_tokens):
-    """Simple TF-IDF cosine similarity between two token lists."""
+def _tfidf_similarity(query_tokens, doc_tokens, idf_dict=None):
+    """TF-IDF cosine similarity between two token lists with real IDF weighting.
+
+    Args:
+        query_tokens: List of tokens from the query.
+        doc_tokens: List of tokens from the document (skill description).
+        idf_dict: Dict mapping term -> IDF weight (from SkillLibrary._get_idf()).
+                  If None, falls back to raw cosine similarity (no IDF weighting).
+
+    IDF weighting downweights common words like "open" that appear in many
+    skills, and upweights unique words like "gmail" or "spotify" that
+    distinguish one skill from another. This prevents false matches like
+    "open chrome" matching "open chrome and go to gmail" with high similarity.
+    """
     if not query_tokens or not doc_tokens:
         return 0.0
 
@@ -70,13 +82,14 @@ def _tfidf_similarity(query_tokens, doc_tokens):
     d_counts = Counter(doc_tokens)
     all_terms = set(q_counts) | set(d_counts)
 
-    # Compute dot product and magnitudes
+    # Compute TF-IDF weighted dot product and magnitudes
     dot = 0.0
     q_mag = 0.0
     d_mag = 0.0
     for term in all_terms:
-        q_val = q_counts.get(term, 0)
-        d_val = d_counts.get(term, 0)
+        idf = idf_dict.get(term, 1.0) if idf_dict else 1.0
+        q_val = q_counts.get(term, 0) * idf
+        d_val = d_counts.get(term, 0) * idf
         dot += q_val * d_val
         q_mag += q_val * q_val
         d_mag += d_val * d_val
@@ -128,11 +141,23 @@ class SkillLibrary:
             except Exception as e:
                 logger.warning(f"SkillLibrary: VectorStore init failed: {e}")
                 self._vectors = None
+        # IDF cache: maps term -> IDF weight, rebuilt when skills change
+        self._idf_cache = {}
+        self._idf_skill_count = 0  # Track skill count to detect changes
+        self._rebuild_idf()
+
         # Auto-cleanup stale skills on load
         try:
             self.cleanup()
         except Exception as e:
             logger.debug(f"Skill auto-cleanup failed: {e}")
+
+    def close(self):
+        """Close the SQLite connection."""
+        try:
+            self._conn.close()
+        except Exception:
+            pass
 
     def _get_db(self):
         conn = sqlite3.connect(self._db_path, check_same_thread=False)
@@ -188,6 +213,55 @@ class SkillLibrary:
                     pass  # Column already exists
 
             self._conn.commit()
+
+    def _rebuild_idf(self):
+        """Build IDF dictionary from all skill descriptions in the database.
+
+        IDF(term) = log(total_skills / skills_containing_term)
+
+        This weights rare, distinctive terms higher than common ones.
+        For example, "open" might appear in 90% of skills (low IDF),
+        while "gmail" appears in only 1 skill (high IDF).
+        """
+        with _db_lock:
+            c = self._conn.cursor()
+            c.execute("SELECT tokens FROM skills")
+            rows = c.fetchall()
+
+        total_docs = len(rows)
+        if total_docs == 0:
+            self._idf_cache = {}
+            self._idf_skill_count = 0
+            return
+
+        # Count how many documents contain each term
+        doc_freq = Counter()
+        for row in rows:
+            tokens_str = row["tokens"] if row["tokens"] else ""
+            unique_terms = set(tokens_str.split())
+            for term in unique_terms:
+                doc_freq[term] += 1
+
+        # Compute IDF: log(total / doc_freq). Use log(1 + total/df) to avoid
+        # zero for terms in all docs, and to give a smooth curve.
+        self._idf_cache = {
+            term: math.log(1.0 + total_docs / df)
+            for term, df in doc_freq.items()
+        }
+        self._idf_skill_count = total_docs
+        logger.debug(f"IDF cache rebuilt: {len(self._idf_cache)} terms from {total_docs} skills")
+
+    def _get_idf(self):
+        """Get the IDF dictionary, rebuilding if skills have changed."""
+        with _db_lock:
+            c = self._conn.cursor()
+            c.execute("SELECT COUNT(*) as cnt FROM skills")
+            current_count = c.fetchone()["cnt"]
+
+        if current_count != self._idf_skill_count:
+            self._rebuild_idf()
+
+        return self._idf_cache
 
     # Browser process names that web-navigation tools inherently launch
     _BROWSER_APPS = frozenset({
@@ -471,6 +545,8 @@ class SkillLibrary:
                         )
                     except Exception as ve:
                         logger.debug(f"VectorStore add failed for '{name}': {ve}")
+                # Invalidate IDF cache — new skill changes term frequencies
+                self._idf_skill_count = -1
                 logger.info(f"Skill saved: {name} ({len(tool_sequence)} steps, "
                             f"category={category})")
                 return f"Skill '{name}' saved ({len(tool_sequence)} steps)"
@@ -558,10 +634,13 @@ class SkillLibrary:
             except Exception as e:
                 logger.debug(f"Vector search failed, falling back to TF-IDF: {e}")
 
-        # Phase 3: Fall back to TF-IDF similarity
+        # Phase 3: Fall back to TF-IDF similarity (with real IDF weighting)
         query_tokens = _tokenize(goal)
         if not query_tokens:
             return []
+
+        # Get IDF weights (rebuilds cache if skills changed)
+        idf = self._get_idf()
 
         with _db_lock:
             c = self._conn.cursor()
@@ -581,7 +660,7 @@ class SkillLibrary:
         results = []
         for row in rows:
             doc_tokens = row["tokens"].split() if row["tokens"] else []
-            sim = _tfidf_similarity(query_tokens, doc_tokens)
+            sim = _tfidf_similarity(query_tokens, doc_tokens, idf_dict=idf)
 
             # Boost for high success count
             if row["success_count"] > 5:
@@ -754,6 +833,8 @@ class SkillLibrary:
                 "DELETE FROM skill_reflections WHERE skill_name = ?", (skill_name,)
             )
             self._conn.commit()
+        # Invalidate IDF cache — removed skill changes term frequencies
+        self._idf_skill_count = -1
 
     def get_skill(self, name):
         """Get a specific skill by name."""
@@ -954,6 +1035,8 @@ class SkillLibrary:
             """)
             self._conn.commit()
             if total_deleted:
+                # Invalidate IDF cache — removed skills change term frequencies
+                self._idf_skill_count = -1
                 logger.info(f"Skill cleanup: removed {total_deleted} stale skills")
 
         # Remove cleaned-up skills from vector store
