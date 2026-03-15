@@ -97,24 +97,35 @@ def play_music(action, query=None, app="spotify", last_user_input="", quick_chat
         is_vague = (q_lower in _VAGUE_MUSIC or q_cleaned in _VAGUE_MUSIC
                     or q_base in _VAGUE_MUSIC or q_base in _GENRE_WORDS
                     or len(q_base) <= 3)
-        if is_vague and quick_chat_fn:
-            try:
-                suggestion = quick_chat_fn(
-                    f"Suggest ONE specific popular song (song name and artist) for: '{query}'. "
-                    f"Reply with ONLY the song name and artist, nothing else. Example: 'Perfect by Ed Sheeran'"
-                )
-                if suggestion and len(suggestion.strip()) > 3:
-                    suggestion = suggestion.strip().strip('"').strip("'")
-                    suggestion = re.sub(r'^(here\'s one:|how about|i suggest|try)\s*', '',
-                                        suggestion, flags=re.I).strip()
-                    suggestion = re.sub(r'^[\"\']|[\"\']$', '', suggestion).strip()
-                    if len(suggestion) > 3:
-                        logger.info(f"Music genre '{query}' -> specific song: '{suggestion}'")
-                        query = suggestion
-            except Exception:
-                pass
+        if is_vague:
+            # Try LLM expansion first (ask for a specific song)
+            if quick_chat_fn:
+                try:
+                    suggestion = quick_chat_fn(
+                        f"Suggest ONE specific popular song (song name and artist) for: '{query}'. "
+                        f"Reply with ONLY the song name and artist, nothing else. Example: 'Perfect by Ed Sheeran'"
+                    )
+                    if suggestion and len(suggestion.strip()) > 3:
+                        suggestion = suggestion.strip().strip('"').strip("'")
+                        suggestion = re.sub(r'^(here\'s one:|how about|i suggest|try)\s*', '',
+                                            suggestion, flags=re.I).strip()
+                        suggestion = re.sub(r'^[\"\']|[\"\']$', '', suggestion).strip()
+                        if len(suggestion) > 3:
+                            logger.info(f"Music vague '{query}' -> specific song: '{suggestion}'")
+                            query = suggestion
+                except Exception:
+                    pass
+            # Fallback: if LLM didn't expand (or wasn't available), use a safe default
             if query.lower().strip() == q_lower:
-                query = "Today's Top Hits" if q_lower in _VAGUE_MUSIC else f"best {q_base} songs"
+                _is_vague_word = (q_lower in _VAGUE_MUSIC or q_cleaned in _VAGUE_MUSIC
+                                  or q_base in _VAGUE_MUSIC)
+                if _is_vague_word:
+                    query = "Today's Top Hits"
+                elif q_base in _GENRE_WORDS:
+                    query = f"best {q_base} songs"
+                else:
+                    query = f"top {q_base} playlist"
+                logger.info(f"Music vague fallback: '{q_lower}' -> '{query}'")
 
     if action in ("play", "play_query") and query:
         # Start PopupGuardian to auto-dismiss popups during media playback
