@@ -31,7 +31,7 @@ class ProductivityPlugin(BasePlugin):
                 description="Session time tracking",
             ),
             PluginIntent(
-                r"(?:start|begin) (?:a )?(?:pomodoro|focus|work) (?:timer|session)?",
+                r"(?:start|begin) (?:a )?(?:pomodoro|focus|work)(?:\s+(?:timer|session))?$",
                 self.start_pomodoro,
                 priority=55,
                 description="Start Pomodoro timer",
