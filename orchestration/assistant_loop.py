@@ -477,14 +477,12 @@ def run(runtime_state=None):
                 with reminder_mgr._lock:
                     reminder_mgr._pending_announcements[0:0] = requeue
             for announcement in pending:
-                interrupted = _say(ainame, announcement)
-                if interrupted:
-                    user_input = interrupted
-                    break
-            else:
-                interrupted = None
+                # Print to console only — don't speak (TTS blocks the main loop)
+                print(f"[REMINDER] {announcement}")
+                logger.info(f"Reminder fired: {announcement}")
+            interrupted = None
             if pending:
-                _ss.touch()  # Reset inactivity timer after speaking reminders
+                _ss.touch()  # Reset inactivity timer after reminders
         except Exception:
             interrupted = None
 
