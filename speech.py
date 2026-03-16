@@ -309,6 +309,53 @@ def _reinitialize_mic(pa):
 _MIC_RECOVERY_MAX_RETRIES = 3
 
 
+# Persistent PyAudio instance for wake word detection — avoids
+# creating/destroying audio streams every 5 seconds which causes
+# Windows mic lockups and missed wake words
+_persistent_pa = None
+_persistent_stream = None
+
+def _get_persistent_mic():
+    """Get or create a persistent mic stream for wake word detection."""
+    global _persistent_pa, _persistent_stream
+    import pyaudio
+    if _persistent_stream is not None:
+        try:
+            _persistent_stream.is_active()
+            return _persistent_pa, _persistent_stream
+        except Exception:
+            # Stream died — recreate
+            _persistent_stream = None
+    if _persistent_pa is None:
+        _persistent_pa = pyaudio.PyAudio()
+    try:
+        _persistent_stream = _persistent_pa.open(
+            format=pyaudio.paInt16, channels=1,
+            rate=_VAD_SAMPLE_RATE, input=True,
+            frames_per_buffer=_VAD_CHUNK_SAMPLES)
+        return _persistent_pa, _persistent_stream
+    except Exception as e:
+        logging.warning(f"Persistent mic open failed: {e}")
+        return None, None
+
+def _close_persistent_mic():
+    """Close persistent mic (called on shutdown or mode change)."""
+    global _persistent_pa, _persistent_stream
+    if _persistent_stream:
+        try:
+            _persistent_stream.stop_stream()
+            _persistent_stream.close()
+        except Exception:
+            pass
+        _persistent_stream = None
+    if _persistent_pa:
+        try:
+            _persistent_pa.terminate()
+        except Exception:
+            pass
+        _persistent_pa = None
+
+
 def _listen_vad_short(max_speech_s=2.0, wait_timeout_s=5.0):
     """Short VAD listen for wake word detection. Returns WAV path or None."""
     # Don't listen while system audio is playing
@@ -327,11 +374,18 @@ def _listen_vad_short(max_speech_s=2.0, wait_timeout_s=5.0):
 
     pa = None
     stream = None
+    _using_persistent = False
     try:
-        pa = pyaudio.PyAudio()
-        stream = pa.open(format=pyaudio.paInt16, channels=1,
-                         rate=_VAD_SAMPLE_RATE, input=True,
-                         frames_per_buffer=_VAD_CHUNK_SAMPLES)
+        # Use persistent mic for wake word (avoids open/close every 5s)
+        pa, stream = _get_persistent_mic()
+        if pa and stream:
+            _using_persistent = True
+        else:
+            # Fallback: create new one
+            pa = pyaudio.PyAudio()
+            stream = pa.open(format=pyaudio.paInt16, channels=1,
+                             rate=_VAD_SAMPLE_RATE, input=True,
+                             frames_per_buffer=_VAD_CHUNK_SAMPLES)
 
         from collections import deque
         pre_buf = deque(maxlen=_VAD_PRE_SPEECH_CHUNKS)
@@ -414,17 +468,19 @@ def _listen_vad_short(max_speech_s=2.0, wait_timeout_s=5.0):
             pass
         return None
     finally:
-        if stream:
-            try:
-                stream.stop_stream()
-                stream.close()
-            except Exception:
-                pass
-        if pa:
-            try:
-                pa.terminate()
-            except Exception:
-                pass
+        # Only close non-persistent streams (persistent ones stay alive)
+        if not _using_persistent:
+            if stream:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except Exception:
+                    pass
+            if pa:
+                try:
+                    pa.terminate()
+                except Exception:
+                    pass
 
 
 # ===================================================================

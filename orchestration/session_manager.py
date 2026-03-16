@@ -22,8 +22,8 @@ from concurrent.futures import ThreadPoolExecutor
 logger = logging.getLogger(__name__)
 
 # Auto-sleep timeouts
-AUTO_SLEEP_SECONDS = 90        # Go to IDLE after 90s of silence
-AUTO_SLEEP_AFTER_AGENT = 180   # Longer timeout after agent tasks
+AUTO_SLEEP_SECONDS = 180       # Go to IDLE after 3 min of silence (was 90s)
+AUTO_SLEEP_AFTER_AGENT = 300   # 5 min after agent tasks (was 180s)
 
 
 def time_greeting():
