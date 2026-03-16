@@ -847,22 +847,11 @@ def _get_whisper_model():
             except Exception:
                 pass
 
-        # Try WhisperX first (4x faster with batched inference)
-        try:
-            import whisperx
-            logging.info(f"Loading WhisperX model on {device} ({compute_type})...")
-            _whisper_model = whisperx.load_model(
-                "base", device=device, compute_type=compute_type,
-            )
-            _whisper_backend = "whisperx"
-            logging.info("WhisperX model loaded (4x faster than standard Whisper)")
-            return _whisper_model
-        except ImportError:
-            logging.info("WhisperX not installed, trying faster-whisper...")
-        except Exception as e:
-            logging.warning(f"WhisperX load failed ({e}), trying faster-whisper...")
-
-        # Fallback: faster-whisper
+        # Try faster-whisper first (better for short voice commands)
+        # faster-whisper uses Silero VAD (already loaded), supports language pinning,
+        # and has lower per-utterance latency than WhisperX for 2-3s clips.
+        # WhisperX is faster for batch processing long audio but adds Pyannote VAD
+        # overhead and auto-detects language per file (slower for interactive use).
         try:
             from faster_whisper import WhisperModel
 
@@ -884,8 +873,23 @@ def _get_whisper_model():
             return _whisper_model
 
         except ImportError:
+            logging.info("faster-whisper not installed, trying WhisperX...")
+        except Exception as e:
+            logging.warning(f"faster-whisper load failed ({e}), trying WhisperX...")
+
+        # Fallback: WhisperX (batched inference, heavier but works)
+        try:
+            import whisperx
+            logging.info(f"Loading WhisperX model on {device} ({compute_type})...")
+            _whisper_model = whisperx.load_model(
+                "base", device=device, compute_type=compute_type,
+            )
+            _whisper_backend = "whisperx"
+            logging.info("WhisperX model loaded")
+            return _whisper_model
+        except ImportError:
             _whisper_failed = True
-            logging.warning("Neither whisperx nor faster-whisper installed. Using Google STT fallback.")
+            logging.warning("Neither faster-whisper nor whisperx installed. Using Google STT fallback.")
             return None
         except Exception as e:
             _whisper_failed = True
