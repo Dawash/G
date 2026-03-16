@@ -33,6 +33,7 @@ from datetime import datetime
 # Cached MemoryStore singleton — avoids leaking SQLite connections
 _memory_store_cache = None
 _plugin_loader = None  # Set by assistant_loop after Brain init
+_jarvis_engine = None  # Set by assistant_loop after Brain init
 def _get_memory_store():
     global _memory_store_cache
     if _memory_store_cache is None:
@@ -2543,6 +2544,22 @@ class Brain:
                     return plugin_result
             except Exception as e:
                 logger.debug(f"Plugin check error: {e}")
+
+        # --- JARVIS SKILL ENGINE (complex multi-step requests) ---
+        # For requests with "and" or multiple verbs, try JARVIS planner
+        # which decomposes into skill chains instead of single LLM call
+        global _jarvis_engine
+        if _jarvis_engine and " and " in user_input.lower():
+            try:
+                jarvis_result = _jarvis_engine.run(user_input, timeout=45)
+                if jarvis_result:
+                    logger.info(f"JARVIS handled: {user_input[:50]}")
+                    self._ctx.append({"role": "user", "content": user_input})
+                    self._ctx.append({"role": "assistant", "content": str(jarvis_result)[:500]})
+                    self._ctx.trim()
+                    return jarvis_result
+            except Exception as e:
+                logger.debug(f"JARVIS engine error: {e}")
 
         # Skip brain entirely if key is known-dead
         if self._key_dead:

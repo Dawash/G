@@ -376,6 +376,20 @@ def run(runtime_state=None):
         logger.debug(f"Plugin system init: {e}")
         _plugin_loader = None
 
+    # Phase 2c: Initialize JARVIS skill engine
+    try:
+        from skills.engine import JarvisEngine
+        import brain as _brain_mod2
+        _jarvis = JarvisEngine(quick_chat_fn=brain.quick_chat)
+        _jarvis.register_builtin_skills(
+            action_registry=action_map,
+            reminder_mgr=reminder_mgr,
+        )
+        _brain_mod2._jarvis_engine = _jarvis
+        logger.info(f"JARVIS engine: {_jarvis.registry.count} skills ready")
+    except Exception as e:
+        logger.debug(f"JARVIS engine init: {e}")
+
     ollama_was_down = [False]
     _start_ollama_health_monitor(provider_name, ollama_was_down, ollama_url=ollama_url)
 
