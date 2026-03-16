@@ -370,6 +370,14 @@ def run(runtime_state=None):
         _plugin_loader.set_speak_fn(speak)
         loaded, errors = _plugin_loader.discover_and_load()
         _brain_mod._plugin_loader = _plugin_loader
+        # Add plugin tools to brain's LLM tool list
+        try:
+            plugin_tools = _plugin_loader.get_tool_definitions()
+            if plugin_tools:
+                brain.tools.extend(plugin_tools)
+                logger.info(f"Added {len(plugin_tools)} plugin tools to LLM")
+        except Exception:
+            pass
         if loaded > 0:
             logger.info(f"Plugins: {loaded} loaded, {errors} errors")
     except Exception as e:
@@ -527,6 +535,26 @@ def run(runtime_state=None):
         interaction_count += 1
         logger.info(f"Loop #{interaction_count}: got input '{user_input[:50]}'")
         memory.log_event(session_id, "user_input", {"text": user_input})
+
+        # Proactive habit suggestions every 20 interactions
+        if interaction_count > 0 and interaction_count % 20 == 0:
+            try:
+                habit_suggestions = habits.suggest_proactive_actions()
+                for suggestion in habit_suggestions[:2]:
+                    print(f"[SUGGESTION] {suggestion}")
+                    logger.info(f"Habit suggestion: {suggestion}")
+            except Exception:
+                pass
+
+        # Every 50 interactions, log session feedback summary
+        if interaction_count > 0 and interaction_count % 50 == 0:
+            try:
+                from orchestration.feedback import get_feedback
+                summary = get_feedback().get_session_summary()
+                if summary:
+                    logger.info(f"Session feedback: {summary}")
+            except Exception:
+                pass
 
         # ----- ALARM DISMISS: check if an alarm is ringing -----
         # When alarm is ringing, ANY voice input is treated as dismissal attempt.

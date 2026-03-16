@@ -2549,7 +2549,12 @@ class Brain:
         # For requests with "and" or multiple verbs, try JARVIS planner
         # which decomposes into skill chains instead of single LLM call
         global _jarvis_engine
-        if _jarvis_engine and " and " in user_input.lower():
+        if _jarvis_engine and (
+            " and " in user_input.lower()
+            or " then " in user_input.lower()
+            or " after " in user_input.lower()
+            or len(user_input.split()) >= 8
+        ):
             try:
                 jarvis_result = _jarvis_engine.run(user_input, timeout=45)
                 if jarvis_result:
