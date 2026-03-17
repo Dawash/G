@@ -426,7 +426,92 @@ def setup_ollama():
         else:
             print(f"  [WARN] Model '{model}' not available. Pull it with: ollama pull {model}")
 
+    # After primary model confirmed ready, check multi-tier routing models
+    ollama_url = OLLAMA_API
+    ensure_essential_models(ollama_url, model)
+
     print("[OK] Local AI brain ready\n")
+
+
+_MODELS_CHECK_FILE = os.path.join(PROJECT_DIR, "data", ".models_checked")
+_MODELS_CHECK_INTERVAL = 7 * 86400  # 7 days
+
+def _should_check_models():
+    """Only check/download models once per week."""
+    try:
+        if os.path.exists(_MODELS_CHECK_FILE):
+            if time.time() - os.path.getmtime(_MODELS_CHECK_FILE) < _MODELS_CHECK_INTERVAL:
+                return False
+    except Exception:
+        pass
+    return True
+
+def _mark_models_checked():
+    os.makedirs(os.path.join(PROJECT_DIR, "data"), exist_ok=True)
+    with open(_MODELS_CHECK_FILE, "w") as f:
+        f.write(str(time.time()))
+
+def ensure_essential_models(ollama_url, primary_model):
+    """Download essential models for multi-tier routing if missing."""
+    if not _should_check_models():
+        return
+
+    import requests as _req
+    try:
+        r = _req.get(f"{ollama_url}/api/tags", timeout=10)
+        if r.status_code != 200:
+            return
+        installed = [m["name"].lower() for m in r.json().get("models", [])]
+    except Exception:
+        return
+
+    primary_lower = primary_model.lower()
+
+    # Check fast tier: need a small model for classification
+    _fast_candidates = ["qwen2.5:7b", "qwen2.5:3b", "gemma3:4b", "phi3:mini", "llama3.2:3b"]
+    _fast_keywords = ["qwen2.5:7b", "qwen2.5:3b", "gemma3:4b", "gemma2:2b", "phi3", "llama3.2:3b"]
+    has_fast = any(any(k in m for k in _fast_keywords) for m in installed)
+    # Primary model might itself be small enough
+    if not has_fast and any(s in primary_lower for s in ["3b", "4b", "7b", "8b", "mini"]):
+        has_fast = True
+
+    # Check vision tier
+    has_vision = any(any(v in m for v in ["llava", "moondream", "bakllava"]) for m in installed)
+
+    to_pull = []
+    if not has_fast:
+        to_pull.append(("fast", "qwen2.5:7b"))
+    if not has_vision:
+        to_pull.append(("vision", "llava:7b"))
+
+    if not to_pull:
+        _mark_models_checked()
+        return
+
+    print("\n  [MODELS] Multi-model routing needs additional models:")
+    for tier, model in to_pull:
+        print(f"    - {model} ({tier} tier)")
+
+    for tier, model in to_pull:
+        print(f"  Pulling {model}...")
+        try:
+            # Use subprocess to show progress (ollama pull has nice output)
+            import subprocess as _sp
+            result = _sp.run(
+                ["ollama", "pull", model],
+                timeout=600,
+                encoding="utf-8", errors="replace",
+            )
+            if result.returncode == 0:
+                print(f"  [OK] {model} ready")
+            else:
+                print(f"  [WARN] Failed to pull {model} — run manually: ollama pull {model}")
+        except _sp.TimeoutExpired:
+            print(f"  [WARN] {model} download timed out — run manually: ollama pull {model}")
+        except Exception as e:
+            print(f"  [WARN] {model} download failed: {e}")
+
+    _mark_models_checked()
 
 
 def _check_vision_model():

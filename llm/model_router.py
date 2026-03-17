@@ -156,6 +156,7 @@ class ModelRouter:
 
     def setup_from_config(self, config: dict) -> None:
         """Populate the pool from config.json."""
+        self._last_config = config  # Store for refresh()
         provider_name = config.get("provider", "ollama")
         api_key = config.get("api_key", "")
         ollama_model = config.get("ollama_model", "")
@@ -255,6 +256,12 @@ class ModelRouter:
                         base_url=ollama_url, supports_tools=False))
         except Exception as e:
             logger.debug("ModelRouter: Ollama detection failed: %s", e)
+
+    def refresh(self, config: dict = None):
+        """Re-detect available models (call after pulling new models)."""
+        cfg = config or getattr(self, '_last_config', None)
+        if cfg:
+            self.setup_from_config(cfg)
 
     # ── Provider factory ──────────────────────────────────────────────────────
 
