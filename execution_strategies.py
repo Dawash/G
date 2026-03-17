@@ -335,6 +335,7 @@ def execute_cli(command, timeout=30):
         result = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
             capture_output=True, text=True, timeout=timeout,
+            encoding="utf-8", errors="replace",
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
         output = result.stdout.strip()

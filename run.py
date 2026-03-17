@@ -145,6 +145,7 @@ def install_package(pip_name):
         [sys.executable, "-m", "pip", "install", pip_name, "--quiet"],
         capture_output=True,
         text=True,
+        encoding="utf-8", errors="replace",
     )
     return result.returncode == 0
 
@@ -205,6 +206,7 @@ def check_dependencies():
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install", "-r", req_file, "--quiet"],
             capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         )
         if result.returncode == 0:
             print("  [OK] All packages from requirements.txt installed")
@@ -739,6 +741,7 @@ def _relaunch_with_preferred_python():
         result = subprocess.run(
             [py_launcher, target, "--version"],
             capture_output=True, text=True, timeout=5,
+            encoding="utf-8", errors="replace",
         )
         if result.returncode != 0:
             return False

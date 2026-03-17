@@ -2318,7 +2318,8 @@ class DesktopAgent:
         import subprocess
         try:
             result = subprocess.run(
-                command, shell=True, capture_output=True, text=True, timeout=15
+                command, shell=True, capture_output=True, text=True, timeout=15,
+                encoding="utf-8", errors="replace"
             )
             output = result.stdout.strip() or result.stderr.strip()
             return output[:2000] if output else "Command completed with no output."
@@ -2358,7 +2359,8 @@ class DesktopAgent:
                 import subprocess
                 result = subprocess.run(
                     ["powershell", "-command", "Get-Clipboard"],
-                    capture_output=True, text=True, timeout=5
+                    capture_output=True, text=True, timeout=5,
+                    encoding="utf-8", errors="replace"
                 )
                 url = result.stdout.strip()
                 if url.startswith(("http://", "https://")):
@@ -2528,7 +2530,8 @@ class DesktopAgent:
             import subprocess
             result = subprocess.run(
                 ["tasklist", "/FI", "STATUS eq Running", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True, timeout=2  # was 5s, rarely > 100ms
+                capture_output=True, text=True, timeout=2,  # was 5s, rarely > 100ms
+                encoding="utf-8", errors="replace"
             )
             # Extract unique app names from CSV, skip system processes
             _SKIP = {"svchost.exe", "csrss.exe", "wininit.exe", "services.exe",

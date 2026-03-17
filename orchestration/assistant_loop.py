@@ -1037,31 +1037,80 @@ def run(runtime_state=None):
             _ack_timer.start()
             try:
                 _t0 = time.time()
-                # Run brain.think() with a hard timeout to prevent hangs
-                # Don't use `with` — shutdown(wait=True) would block on timeout
-                _pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                _fut = _pool.submit(
-                    brain.think, user_input,
-                    detected_language=get_detected_language()
-                )
+
+                # ── Streaming path: stream_think() → speak_stream() ──
+                # Runs the full think() tool-calling loop, then streams the
+                # final response sentence-by-sentence to TTS so the user
+                # hears the first sentence before the full text is done.
+                _streamed = False
+                response = None
                 try:
-                    response = _fut.result(timeout=_BRAIN_TIMEOUT)
-                except concurrent.futures.TimeoutError:
-                    logger.error(f"Brain.think() timed out after {_BRAIN_TIMEOUT}s")
-                    _debug_trace(f"Loop#{interaction_count} TIMEOUT after {_BRAIN_TIMEOUT}s")
-                    # Signal Brain to stop between tool rounds
-                    brain._cancelled = True
-                    # Use friendly error for natural timeout message
-                    from brain import _friendly_error
-                    response = _friendly_error(
-                        f"Brain timed out after {_BRAIN_TIMEOUT}s",
-                        user_input=user_input,
+                    if hasattr(brain, 'stream_think') and is_connected and _brain_available:
+                        import queue as _q
+                        _sentence_q = _q.Queue()
+                        _stream_done = threading.Event()
+                        _stream_err = [None]
+
+                        def _stream_producer():
+                            try:
+                                for sentence in brain.stream_think(
+                                    user_input,
+                                    detected_language=get_detected_language(),
+                                ):
+                                    _sentence_q.put(sentence)
+                            except Exception as _e:
+                                _stream_err[0] = _e
+                            finally:
+                                _stream_done.set()
+
+                        _st = threading.Thread(target=_stream_producer, daemon=True)
+                        _st.start()
+
+                        _parts = []
+                        _deadline = time.time() + _BRAIN_TIMEOUT
+                        while not _stream_done.is_set() or not _sentence_q.empty():
+                            try:
+                                _wait = min(2.0, max(0.1, _deadline - time.time()))
+                                _sent = _sentence_q.get(timeout=_wait)
+                                if _sent:
+                                    if not _parts:
+                                        _ack_timer.cancel()
+                                    _parts.append(_sent)
+                            except _q.Empty:
+                                if time.time() >= _deadline:
+                                    brain._cancelled = True
+                                    break
+
+                        if _parts:
+                            response = " ".join(_parts)
+                            _streamed = True
+                except Exception as _se:
+                    logger.debug(f"stream_think path failed: {_se}")
+
+                # ── Fallback: blocking brain.think() ──
+                if not _streamed:
+                    _pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    _fut = _pool.submit(
+                        brain.think, user_input,
+                        detected_language=get_detected_language()
                     )
-                finally:
-                    _pool.shutdown(wait=False)
+                    try:
+                        response = _fut.result(timeout=_BRAIN_TIMEOUT)
+                    except concurrent.futures.TimeoutError:
+                        logger.error(f"Brain.think() timed out after {_BRAIN_TIMEOUT}s")
+                        _debug_trace(f"Loop#{interaction_count} TIMEOUT after {_BRAIN_TIMEOUT}s")
+                        brain._cancelled = True
+                        from brain import _friendly_error
+                        response = _friendly_error(
+                            f"Brain timed out after {_BRAIN_TIMEOUT}s",
+                            user_input=user_input,
+                        )
+                    finally:
+                        _pool.shutdown(wait=False)
+
                 _elapsed = time.time() - _t0
                 logger.info(f"Brain returned in {_elapsed:.1f}s: {str(response)[:80] if response else 'None'}")
-                _debug_trace(f"Loop#{interaction_count} brain={_elapsed:.1f}s resp={'yes' if response else 'None'}")
+                _debug_trace(f"Loop#{interaction_count} brain={_elapsed:.1f}s resp={'yes' if response else 'None'} streamed={_streamed}")
 
                 _ss.touch()
                 _ss.last_mode_was_agent = _elapsed > 10

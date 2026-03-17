@@ -79,18 +79,21 @@ def _summarize_news(headlines):
     else:
         news_content = "\n".join(f"- {h}" for h in headlines)
 
-    # LLM summarization — use provider.chat() which takes a plain string
+    # LLM summarization — use a fast/small model to avoid blocking startup
     try:
         from ai_providers import create_provider
         from config import load_config, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL
         cfg = load_config()
         if cfg:
+            # Use the smallest available model for fast summarization
+            # (the 32b model takes 30-60s which blocks greeting)
+            _fast_model = "qwen2.5:7b"
             provider = create_provider(
                 cfg["provider"], cfg["api_key"],
                 "You are a friendly English-speaking news anchor giving a quick morning briefing. "
                 "ALWAYS respond in English only. Never use Chinese, Japanese, or any other language. "
                 "Be conversational and brief.",
-                ollama_model=cfg.get("ollama_model", DEFAULT_OLLAMA_MODEL),
+                ollama_model=_fast_model,
                 ollama_url=cfg.get("ollama_url", DEFAULT_OLLAMA_URL))
             prompt = (
                 "Summarize the following news into exactly 2-3 SHORT sentences (max 50 words total). "
@@ -167,18 +170,22 @@ def startup_greeting(config, reminder_mgr, speak_fn, speak_async_fn):
         except Exception:
             pass
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [
-            pool.submit(_fetch_weather),
-            pool.submit(_fetch_rain),
-            pool.submit(_fetch_battery),
-            pool.submit(_fetch_news),
-        ]
-        for future in futures:
-            try:
-                future.result(timeout=8)  # Allow time for LLM news summary
-            except Exception:
-                pass
+    # Don't use `with` — ThreadPoolExecutor.__exit__ blocks until ALL threads finish,
+    # even if our timeout expired. Fire-and-forget so the greeting isn't held hostage
+    # by a slow LLM news summary.
+    _pool = ThreadPoolExecutor(max_workers=4)
+    futures = [
+        _pool.submit(_fetch_weather),
+        _pool.submit(_fetch_rain),
+        _pool.submit(_fetch_battery),
+        _pool.submit(_fetch_news),
+    ]
+    for future in futures:
+        try:
+            future.result(timeout=6)
+        except Exception:
+            pass
+    _pool.shutdown(wait=False)  # don't block — let stragglers finish in background
 
     # Weather — spoken (short)
     if weather_result[0]:

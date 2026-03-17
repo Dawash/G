@@ -81,6 +81,7 @@ def execute_code(code: str, timeout: int = TIMEOUT) -> dict:
             timeout=timeout,
             cwd=tempfile.gettempdir(),
             env=_restricted_env(),
+            encoding="utf-8", errors="replace",
         )
         elapsed = time.perf_counter() - t0
 

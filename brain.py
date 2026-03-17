@@ -2294,7 +2294,7 @@ class Brain:
             if any(ind in result_lower for ind in _PARTIAL_INDICATORS):
                 logger.info(f"Direct dispatch partial ({strategy}) — escalating to agent")
                 try:
-                    agent_result = self._run_agent_mode(user_input)
+                    agent_result = self._run_agent_mode_v2(user_input) or self._run_agent_mode(user_input)
                     if agent_result and "error" not in str(agent_result).lower():
                         return agent_result
                 except Exception as e:
@@ -2700,7 +2700,8 @@ class Brain:
                                     ["tasklist", "/FI",
                                      f"IMAGENAME eq {app_name}.exe",
                                      "/NH"],
-                                    capture_output=True, text=True, timeout=3
+                                    capture_output=True, text=True, timeout=3,
+                                    encoding="utf-8", errors="replace"
                                 )
                                 if app_name.lower() in proc.stdout.lower():
                                     logger.debug(
@@ -2824,6 +2825,22 @@ class Brain:
                     self.system_prompt += f"\n\nCOGNITIVE:\n{cog_ctx}"
             except Exception:
                 pass
+
+        # Inject relevant past interactions from memory (lightweight — max 1 episode)
+        try:
+            mem_ctx = self.get_memory_context(user_input)
+            similar = mem_ctx.get("similar_episodes", [])
+            if similar and similar[0]:
+                past = similar[0]
+                _past_input = past.get("input", "")
+                _past_resp = past.get("response", "")[:100]
+                if _past_input:
+                    self.system_prompt += (
+                        f"\n\n[Past interaction: User asked '{_past_input}'"
+                        f" → '{_past_resp}']"
+                    )
+        except Exception:
+            pass
 
         # Handle "do that again" / "same thing" — replay last SUCCESSFUL action
         if re.search(r'\b(do that again|same thing|repeat that action|again)\b', user_input, re.I):
@@ -2951,7 +2968,7 @@ class Brain:
                     _agent_goal = user_input
                     if _similar_hint:
                         _agent_goal = f"{user_input} (NOTE: past failures suggest: {_similar_hint})"
-                    agent_result = self._run_agent_mode(_agent_goal)
+                    agent_result = self._run_agent_mode_v2(_agent_goal) or self._run_agent_mode(_agent_goal)
                     if agent_result and "error" not in str(agent_result).lower():
                         result = agent_result
                 except Exception as e:
@@ -3146,6 +3163,27 @@ class Brain:
                 logger.info(f"Learned personal fact: {key} = {val}")
             except Exception:
                 pass
+
+    def _run_agent_mode_v2(self, user_input):
+        """Try the new clean desktop agent (agent/desktop_agent.py) before legacy."""
+        try:
+            from agent.desktop_agent import DesktopAgent
+            agent = DesktopAgent(goal=user_input)
+            result = agent.run()
+            if result and result.get("success"):
+                # Learn the successful sequence as a skill
+                try:
+                    from memory.memory_api import memory as _mem
+                    steps = result.get("steps", [])
+                    if steps:
+                        _mem.learn_skill(user_input, steps)
+                except Exception:
+                    pass
+                return result.get("message", "Done.")
+            return None  # Fall through to legacy agent
+        except Exception as e:
+            logger.debug(f"Agent v2 failed, falling back to legacy: {e}")
+            return None
 
     def _run_agent_mode(self, user_input):
         """Run autonomous agent. Tries CLI/API strategies first, then desktop agent.

@@ -1,0 +1,67 @@
+{
+  "battery_low": {
+    "fire_count": 0,
+    "accept_count": 0,
+    "reject_count": 0
+  },
+  "high_ram": {
+    "fire_count": 0,
+    "accept_count": 0,
+    "reject_count": 0
+  },
+  "disk_full": {
+    "fire_count": 0,
+    "accept_count": 0,
+    "reject_count": 0
+  },
+  "network_lost": {
+    "fire_count": 0,
+    "accept_count": 0,
+    "reject_count": 0
+  },
+  "morning_briefing": {
+    "fire_count": 0,
+    "accept_count": 0,
+    "reject_count": 0
+  },
+  "meeting_alert": {
+    "fire_count": 0,
+    "accept_count": 0,
+    "reject_count": 0
+  },
+  "end_of_day_summary": {
+    "fire_count": 0,
+    "accept_count": 0,
+    "reject_count": 0
+  },
+  "late_night": {
+    "fire_count": 0,
+    "accept_count": 0,
+    "reject_count": 0
+  },
+  "idle_during_work": {
+    "fire_count": 0,
+    "accept_count": 0,
+    "reject_count": 0
+  },
+  "repetitive_search": {
+    "fire_count": 0,
+    "accept_count": 0,
+    "reject_count": 0
+  },
+  "clipboard_helper": {
+    "fire_count": 0,
+    "accept_count": 0,
+    "reject_count": 0
+  },
+  "app_crash": {
+    "fire_count": 0,
+    "accept_count": 0,
+    "reject_count": 0
+  },
+  "morning_routine": {
+    "fire_count": 0,
+    "accept_count": 0,
+    "reject_count": 0
+  }
+}

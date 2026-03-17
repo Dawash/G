@@ -149,6 +149,7 @@ class WindowsExecutor:
             result = subprocess.run(
                 ["taskkill", "/IM", f"{name}.exe", "/F"],
                 capture_output=True, text=True, timeout=5,
+                encoding="utf-8", errors="replace",
             )
             time.sleep(0.5)
             still_open = self._obs.is_window_open(name)

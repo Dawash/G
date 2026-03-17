@@ -651,7 +651,8 @@ def _system_info_skill(inputs):
     if cmd:
         try:
             r = subprocess.run(["powershell", "-NoProfile", "-Command", cmd],
-                               capture_output=True, text=True, timeout=10)
+                               capture_output=True, text=True, timeout=10,
+                               encoding="utf-8", errors="replace")
             return r.stdout.strip() or "No output."
         except Exception as e:
             return f"Error: {e}"

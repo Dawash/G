@@ -110,7 +110,8 @@ class ActionExecutor:
                 import subprocess
                 result = subprocess.run(
                     str(action.value), shell=True, capture_output=True,
-                    text=True, timeout=30
+                    text=True, timeout=30,
+                    encoding="utf-8", errors="replace"
                 )
                 return result.returncode == 0
 

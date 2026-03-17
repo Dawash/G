@@ -36,6 +36,7 @@ def check_rust() -> bool:
             capture_output=True,
             text=True,
             timeout=10,
+            encoding="utf-8", errors="replace",
         )
         if result.returncode == 0:
             print(f"  [Rust] {result.stdout.strip()}")
@@ -55,6 +56,7 @@ def get_rust_version() -> str:
             capture_output=True,
             text=True,
             timeout=10,
+            encoding="utf-8", errors="replace",
         )
         return result.stdout.strip() if result.returncode == 0 else ""
     except Exception:

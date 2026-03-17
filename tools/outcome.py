@@ -92,6 +92,7 @@ def check_process_running(process_name):
         result = subprocess.run(
             ["tasklist", "/FI", f"IMAGENAME eq {process_name}", "/NH"],
             capture_output=True, text=True, timeout=5,
+            encoding="utf-8", errors="replace",
         )
         if process_name.lower() in result.stdout.lower():
             return True, "Process found"

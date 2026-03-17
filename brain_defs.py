@@ -378,7 +378,8 @@ def _manage_software(action, name=None):
     """Manage software via winget."""
     try:
         ver_result = subprocess.run(["winget", "--version"], capture_output=True,
-                                     text=True, timeout=5)
+                                     text=True, timeout=5,
+                                     encoding="utf-8", errors="replace")
         logger.debug(f"winget version: {ver_result.stdout.strip()}")
     except FileNotFoundError:
         return ("winget is not installed. To install it:\n"
@@ -398,6 +399,7 @@ def _manage_software(action, name=None):
             result = subprocess.run(
                 ["winget", "search", "--query", name, "--source", "winget"],
                 capture_output=True, text=True, timeout=timeout,
+                encoding="utf-8", errors="replace",
             )
         elif action == "install":
             if not name:
@@ -407,6 +409,7 @@ def _manage_software(action, name=None):
                  "--source", "winget",
                  "--accept-package-agreements", "--accept-source-agreements"],
                 capture_output=True, text=True, timeout=timeout,
+                encoding="utf-8", errors="replace",
             )
         elif action == "uninstall":
             if not name:
@@ -414,6 +417,7 @@ def _manage_software(action, name=None):
             result = subprocess.run(
                 ["winget", "uninstall", "--query", name],
                 capture_output=True, text=True, timeout=timeout,
+                encoding="utf-8", errors="replace",
             )
         elif action == "update":
             if not name:
@@ -421,11 +425,13 @@ def _manage_software(action, name=None):
             result = subprocess.run(
                 ["winget", "upgrade", "--query", name],
                 capture_output=True, text=True, timeout=timeout,
+                encoding="utf-8", errors="replace",
             )
         elif action == "update_all":
             result = subprocess.run(
                 ["winget", "upgrade", "--all"],
                 capture_output=True, text=True, timeout=timeout,
+                encoding="utf-8", errors="replace",
             )
         elif action == "list":
             cmd = ["winget", "list"]
@@ -433,6 +439,7 @@ def _manage_software(action, name=None):
                 cmd += ["--query", name]
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout,
+                encoding="utf-8", errors="replace",
             )
         else:
             return f"Unknown software action: {action}"
@@ -863,6 +870,7 @@ def _toggle_system_setting(setting, state):
             result = subprocess.run(
                 ["powershell", "-NoProfile", "-Command", ps_cmd],
                 capture_output=True, text=True, timeout=15,
+                encoding="utf-8", errors="replace",
             )
             if result.returncode == 0:
                 return f"Bluetooth has been turned {'on' if turn_on else 'off'}."
@@ -880,6 +888,7 @@ def _toggle_system_setting(setting, state):
             result = subprocess.run(
                 ["netsh", "interface", "set", "interface", "Wi-Fi", action],
                 capture_output=True, text=True, timeout=10,
+                encoding="utf-8", errors="replace",
             )
             if result.returncode == 0:
                 return f"WiFi has been turned {'on' if turn_on else 'off'}."
@@ -946,7 +955,8 @@ def _wait_for_process(name, timeout=5):
     for _ in range(timeout * 4):
         result = subprocess.run(
             ["tasklist", "/FI", f"IMAGENAME eq {name}", "/NH"],
-            capture_output=True, text=True
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace"
         )
         if name.lower() in result.stdout.lower():
             return True
@@ -1063,7 +1073,8 @@ def _verify_tool_completion(tool_name, arguments, result, user_input=""):
         exe = app_info[0]
         try:
             proc = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {exe}", "/V", "/FO", "CSV"],
-                          capture_output=True, text=True, timeout=10)
+                          capture_output=True, text=True, timeout=10,
+                          encoding="utf-8", errors="replace")
             if exe.lower() in proc.stdout.lower():
                 what_done.append(f"{app} is running")
 

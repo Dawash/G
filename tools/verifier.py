@@ -76,7 +76,8 @@ def verify_tool_completion(tool_name, arguments, result, user_input=""):
         try:
             proc = subprocess.run(
                 ["tasklist", "/FI", f"IMAGENAME eq {exe}", "/V", "/FO", "CSV"],
-                capture_output=True, text=True, timeout=10)
+                capture_output=True, text=True, timeout=10,
+                encoding="utf-8", errors="replace")
             if exe.lower() in proc.stdout.lower():
                 what_done.append(f"{app} is running")
 

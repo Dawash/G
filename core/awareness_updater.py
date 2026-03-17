@@ -248,7 +248,8 @@ def _get_active_window_linux() -> Tuple[str, str]:
         import subprocess
         r1 = subprocess.run(
             ["xdotool", "getactivewindow", "getwindowname"],
-            capture_output=True, text=True, timeout=2
+            capture_output=True, text=True, timeout=2,
+            encoding="utf-8", errors="replace"
         )
         title = r1.stdout.strip()
 
@@ -256,7 +257,8 @@ def _get_active_window_linux() -> Tuple[str, str]:
         try:
             r2 = subprocess.run(
                 ["xdotool", "getactivewindow", "getwindowpid"],
-                capture_output=True, text=True, timeout=2
+                capture_output=True, text=True, timeout=2,
+                encoding="utf-8", errors="replace"
             )
             pid = r2.stdout.strip()
             if pid:
@@ -287,7 +289,8 @@ def _get_active_window_macos() -> Tuple[str, str]:
             'return n & "|" & w'
         )
         r = subprocess.run(["osascript", "-e", script],
-                           capture_output=True, text=True, timeout=3)
+                           capture_output=True, text=True, timeout=3,
+                           encoding="utf-8", errors="replace")
         parts = r.stdout.strip().split("|", 1)
         app = parts[0] if parts else ""
         title = parts[1] if len(parts) > 1 else ""
@@ -371,20 +374,23 @@ def _read_clipboard(system: str) -> str:
             r = subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive",
                  "-command", "Get-Clipboard"],
-                capture_output=True, text=True, timeout=3
+                capture_output=True, text=True, timeout=3,
+                encoding="utf-8", errors="replace"
             )
             return r.stdout.strip()[:200]
         elif system == "Linux":
             import subprocess
             r = subprocess.run(
                 ["xclip", "-selection", "clipboard", "-o"],
-                capture_output=True, text=True, timeout=2
+                capture_output=True, text=True, timeout=2,
+                encoding="utf-8", errors="replace"
             )
             return r.stdout.strip()[:200]
         elif system == "Darwin":
             import subprocess
             r = subprocess.run(
-                ["pbpaste"], capture_output=True, text=True, timeout=2
+                ["pbpaste"], capture_output=True, text=True, timeout=2,
+                encoding="utf-8", errors="replace"
             )
             return r.stdout.strip()[:200]
     except Exception:
