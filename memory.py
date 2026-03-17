@@ -19,7 +19,11 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory.db")
+try:
+    from core.paths import MEMORY_DB
+    DB_FILE = MEMORY_DB
+except ImportError:
+    DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory.db")
 
 
 class MemoryStore:

@@ -31,13 +31,13 @@ def _execute_tool(tool_name, arguments):
     # Import tool handlers based on name
     # System tools
     if tool_name == "run_terminal":
-        from brain_defs import _run_terminal
+        from tools.system_tools import _run_terminal
         admin = arguments.get("admin", False)
         cmd = arguments.get("command", "")
         return _run_terminal(cmd, admin)
 
     elif tool_name == "manage_files":
-        from brain_defs import _manage_files
+        from tools.system_tools import _manage_files
         return _manage_files(
             arguments.get("action", ""),
             arguments.get("path", ""),
@@ -45,7 +45,7 @@ def _execute_tool(tool_name, arguments):
         )
 
     elif tool_name == "manage_software":
-        from brain_defs import _manage_software
+        from tools.system_tools import _manage_software
         return _manage_software(
             arguments.get("action", ""),
             arguments.get("name", ""),

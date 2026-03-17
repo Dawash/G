@@ -32,4 +32,16 @@ else:
     class HabitTracker:        # type: ignore[no-redef]
         def __init__(self, *a, **kw): pass
 
-del _ilu, _os, _legacy_path
+del _ilu, _legacy_path
+
+# Auto-migrate legacy databases on first use
+try:
+    from core.paths import MEMORY_DB as _new_db, LEGACY_MEMORY_DB as _old1, LEGACY_EPISODIC_DB as _old2
+    if not _os.path.exists(_new_db) and (_os.path.exists(_old1) or _os.path.exists(_old2)):
+        from memory.migration import migrate
+        migrate()
+    del _new_db, _old1, _old2
+except Exception:
+    pass
+
+del _os

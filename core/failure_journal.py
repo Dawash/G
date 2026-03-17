@@ -150,9 +150,13 @@ class FailureRecord:
 # Failure journal (SQLite-backed, thread-safe)
 # ===================================================================
 
-# Default DB path — same as memory.db
-_DB_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "memory.db")
+# Default DB path — consolidated database
+try:
+    from core.paths import MEMORY_DB
+    _DB_FILE = MEMORY_DB
+except ImportError:
+    _DB_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "memory.db")
 
 
 class FailureJournal:

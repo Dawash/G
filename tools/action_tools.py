@@ -6,11 +6,118 @@ Registers: close_app, minimize_app, toggle_setting, system_command,
 """
 
 import logging
+import subprocess
 
 from tools.schemas import ToolSpec
 from tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+
+# ===================================================================
+# Toggle system settings (moved from brain_defs.py)
+# ===================================================================
+
+def _toggle_system_setting(setting, state):
+    """Toggle a Windows system setting (Bluetooth, WiFi, etc.) via PowerShell."""
+    setting = setting.lower().strip()
+    turn_on = state in ("on", "enable", "true", "1")
+
+    if "bluetooth" in setting:
+        if turn_on:
+            ps_cmd = (
+                'Add-Type -AssemblyName System.Runtime.WindowsRuntime; '
+                '$asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | '
+                'Where-Object { $_.Name -eq "AsTask" -and $_.GetParameters().Count -eq 1 -and '
+                '$_.GetParameters()[0].ParameterType.Name -eq "IAsyncOperation`1" })[0]; '
+                '$radio = [Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime]::GetRadiosAsync(); '
+                '$asTaskGeneric = $asTask.MakeGenericMethod([System.Collections.Generic.IReadOnlyList[Windows.Devices.Radios.Radio]]); '
+                '$radios = $asTaskGeneric.Invoke($null, @($radio)); '
+                '$radios.Wait(); '
+                'foreach ($r in $radios.Result) { '
+                'if ($r.Kind -eq "Bluetooth") { '
+                '$setTask = $r.SetStateAsync("On"); '
+                '$asTask2 = $asTask.MakeGenericMethod([Windows.Devices.Radios.RadioAccessStatus]); '
+                '$asTask2.Invoke($null, @($setTask)).Wait() } }'
+            )
+        else:
+            ps_cmd = (
+                'Add-Type -AssemblyName System.Runtime.WindowsRuntime; '
+                '$asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | '
+                'Where-Object { $_.Name -eq "AsTask" -and $_.GetParameters().Count -eq 1 -and '
+                '$_.GetParameters()[0].ParameterType.Name -eq "IAsyncOperation`1" })[0]; '
+                '$radio = [Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime]::GetRadiosAsync(); '
+                '$asTaskGeneric = $asTask.MakeGenericMethod([System.Collections.Generic.IReadOnlyList[Windows.Devices.Radios.Radio]]); '
+                '$radios = $asTaskGeneric.Invoke($null, @($radio)); '
+                '$radios.Wait(); '
+                'foreach ($r in $radios.Result) { '
+                'if ($r.Kind -eq "Bluetooth") { '
+                '$setTask = $r.SetStateAsync("Off"); '
+                '$asTask2 = $asTask.MakeGenericMethod([Windows.Devices.Radios.RadioAccessStatus]); '
+                '$asTask2.Invoke($null, @($setTask)).Wait() } }'
+            )
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                capture_output=True, text=True, timeout=15,
+                encoding="utf-8", errors="replace",
+            )
+            if result.returncode == 0:
+                return f"Bluetooth has been turned {'on' if turn_on else 'off'}."
+            else:
+                subprocess.Popen(["explorer", "ms-settings:bluetooth"])
+                return f"Opened Bluetooth settings. Please toggle it manually."
+        except Exception as e:
+            logger.error(f"Bluetooth toggle failed: {e}")
+            subprocess.Popen(["explorer", "ms-settings:bluetooth"])
+            return f"Couldn't toggle Bluetooth automatically. Opened settings for you."
+
+    elif "wifi" in setting or "wi-fi" in setting:
+        action = "enable" if turn_on else "disable"
+        try:
+            result = subprocess.run(
+                ["netsh", "interface", "set", "interface", "Wi-Fi", action],
+                capture_output=True, text=True, timeout=10,
+                encoding="utf-8", errors="replace",
+            )
+            if result.returncode == 0:
+                return f"WiFi has been turned {'on' if turn_on else 'off'}."
+            logger.warning(f"WiFi netsh failed (needs admin): {result.stderr.strip()}")
+            subprocess.Popen(["explorer", "ms-settings:network-wifi"])
+            return f"Opened WiFi settings. Please toggle it manually (needs admin rights)."
+        except Exception as e:
+            logger.error(f"WiFi toggle failed: {e}")
+            subprocess.Popen(["explorer", "ms-settings:network-wifi"])
+            return f"Couldn't toggle WiFi automatically. Opened settings for you."
+
+    elif "airplane" in setting or "flight" in setting:
+        subprocess.Popen(["explorer", "ms-settings:network-airplanemode"])
+        return "Opened Airplane Mode settings. Please toggle it manually."
+
+    elif "night light" in setting or "nightlight" in setting:
+        subprocess.Popen(["explorer", "ms-settings:nightlight"])
+        state_word = "on" if turn_on else "off"
+        return f"Opened Night Light settings to turn it {state_word}. Please toggle it."
+
+    elif "dark mode" in setting or "darkmode" in setting:
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                0, winreg.KEY_SET_VALUE,
+            )
+            val = 0 if not turn_on else 1
+            winreg.SetValueEx(key, "AppsUseLightTheme", 0, winreg.REG_DWORD, val)
+            winreg.SetValueEx(key, "SystemUsesLightTheme", 0, winreg.REG_DWORD, val)
+            winreg.CloseKey(key)
+            return f"Dark mode has been turned {'on' if not turn_on else 'off'}."
+        except Exception as e:
+            return f"Dark mode toggle failed: {e}"
+
+    else:
+        subprocess.Popen(["explorer", "ms-settings:"])
+        return f"I don't have a direct toggle for '{setting}'. Opened Windows Settings."
 
 
 # ===================================================================
@@ -30,7 +137,6 @@ def _handle_minimize_app(arguments, action_registry=None):
 
 
 def _handle_toggle_setting(arguments):
-    from brain_defs import _toggle_system_setting
     setting = arguments.get("setting", "").lower()
     state = arguments.get("state", "off").lower()
     return _toggle_system_setting(setting, state)
@@ -86,7 +192,6 @@ def _rollback_close_app(arguments, action_registry):
 
 
 def _rollback_toggle_setting(arguments, action_registry):
-    from brain_defs import _toggle_system_setting
     setting = arguments.get("setting", "")
     state = arguments.get("state", "off")
     opposite = "on" if state == "off" else "off"

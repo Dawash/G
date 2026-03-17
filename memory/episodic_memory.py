@@ -18,7 +18,11 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.path.join("data", "episodic_memory.db")
+try:
+    from core.paths import MEMORY_DB
+    DB_PATH = MEMORY_DB
+except ImportError:
+    DB_PATH = os.path.join("data", "episodic_memory.db")
 
 
 @dataclass

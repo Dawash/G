@@ -23,6 +23,11 @@ import sqlite3
 
 logger = logging.getLogger(__name__)
 
+try:
+    from core.paths import MEMORY_DB as _DEFAULT_DB
+except ImportError:
+    _DEFAULT_DB = "memory.db"
+
 # Manual seed examples — high-quality command→tool mappings
 _SEED_EXAMPLES = [
     {"input": "what time is it", "tool": "get_time", "args": {}},
@@ -57,7 +62,7 @@ _SEED_EXAMPLES = [
 ]
 
 
-def export_from_usage_log(db_path="memory.db", limit=500):
+def export_from_usage_log(db_path=_DEFAULT_DB, limit=500):
     """Extract command→action pairs from usage_log in memory.db."""
     examples = []
     if not os.path.exists(db_path):
@@ -90,7 +95,7 @@ def export_from_usage_log(db_path="memory.db", limit=500):
     return examples
 
 
-def export_from_skills(db_path="memory.db"):
+def export_from_skills(db_path=_DEFAULT_DB):
     """Extract successful skill sequences from skill library."""
     examples = []
     if not os.path.exists(db_path):

@@ -9,12 +9,156 @@ Registers: play_music, search_in_app, create_file, type_text, press_key,
 """
 
 import logging
+import os
 import re
+import subprocess
 
 from tools.schemas import ToolSpec
 from tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+
+# ===================================================================
+# File creation helpers (moved from brain_defs.py)
+# ===================================================================
+
+def _get_ollama_url():
+    """Get the Ollama URL from config, with fallback to default."""
+    try:
+        from config import load_config, DEFAULT_OLLAMA_URL
+        cfg = load_config()
+        return cfg.get("ollama_url", DEFAULT_OLLAMA_URL).rstrip("/")
+    except Exception:
+        return "http://localhost:11434"
+
+
+def _get_ollama_model():
+    """Get the configured Ollama model name, with fallback to default."""
+    try:
+        from config import load_config, DEFAULT_OLLAMA_MODEL
+        cfg = load_config()
+        return cfg.get("ollama_model", DEFAULT_OLLAMA_MODEL)
+    except Exception:
+        return "qwen2.5:7b"
+
+
+def _generate_file_content(prompt, max_tokens=2048, timeout=120):
+    """Generate file content using Ollama with higher token limit than quick_chat."""
+    try:
+        import requests as _req
+        ollama_url = _get_ollama_url()
+        # Use Ollama native API (faster than OpenAI-compat for long outputs)
+        resp = _req.post(
+            f"{ollama_url}/api/generate",
+            json={
+                "model": _get_ollama_model(),
+                "prompt": prompt,
+                "stream": False,
+                "options": {"num_predict": max_tokens, "temperature": 0.7},
+            },
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json().get("response", "")
+    except Exception:
+        return None
+
+
+def _execute_create_file(path, content, quick_chat_fn=None, user_request=""):
+    """Create a file on the user's computer.
+    Defaults to ~/Desktop. Blocks path traversal and absolute paths.
+    """
+    if not path:
+        return "Error: file path is required."
+
+    # Expand environment variables (%USERPROFILE%, %APPDATA%, etc.)
+    # LLMs often generate paths like %USERPROFILE%\Desktop\file.txt
+    path = os.path.expandvars(path)
+
+    # If content is empty, use LLM to generate real content
+    if not content or len(content.strip()) < 10:
+        ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        if ext in ("py", "html", "css", "js", "json", "md", "sh", "bat", "java", "cpp", "c", "ts"):
+            if quick_chat_fn:
+                try:
+                    gen_prompt = (
+                        f"Generate the complete content for a file called '{path}'. "
+                        f"User's request: '{user_request}'. "
+                        f"Output ONLY the file content, no explanations or markdown fences."
+                    )
+                    # Use direct Ollama/API call with higher token limit for code generation
+                    generated = _generate_file_content(gen_prompt)
+                    if not generated or len(generated.strip()) < 10:
+                        generated = quick_chat_fn(gen_prompt)
+                    if generated and len(generated.strip()) > 10:
+                        generated = re.sub(r'^```\w*\n?', '', generated.strip())
+                        generated = re.sub(r'\n?```$', '', generated.strip())
+                        content = generated
+                except Exception:
+                    pass
+        if not content or len(content.strip()) < 10:
+            boilerplate = {
+                "html": "<!DOCTYPE html>\n<html>\n<head><meta charset=\"UTF-8\"><title>Page</title></head>\n<body>\n  <h1>Hello World</h1>\n</body>\n</html>",
+                "css": "body { margin: 0; font-family: sans-serif; }\n",
+                "js": "console.log('Ready');\n",
+                "py": "def main():\n    pass\n\nif __name__ == '__main__':\n    main()\n",
+                "txt": "",
+            }
+            content = boilerplate.get(ext, "# New file\n")
+
+    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+    documents = os.path.join(os.path.expanduser("~"), "Documents")
+
+    # Handle absolute paths that point to Desktop/Documents (e.g. from expandvars)
+    norm_path = os.path.normpath(path)
+    if os.path.isabs(norm_path):
+        if norm_path.lower().startswith(os.path.normpath(desktop).lower()):
+            path = os.path.relpath(norm_path, desktop)
+        elif norm_path.lower().startswith(os.path.normpath(documents).lower()):
+            path = os.path.relpath(norm_path, documents)
+            desktop = documents
+        else:
+            return "Error: files can only be created under Desktop or Documents."
+    elif ".." in path:
+        return "Error: '..' is not allowed in file paths."
+
+    path = path.replace("\\", "/")
+
+    path_lower = path.lower()
+    if path_lower.startswith("desktop/") or path_lower.startswith("desktop\\"):
+        path = path[8:]
+    elif path_lower.startswith("documents/") or path_lower.startswith("documents\\"):
+        path = path[10:]
+        desktop = documents
+
+    full_path = os.path.normpath(os.path.join(desktop, path))
+
+    if not (full_path.startswith(os.path.normpath(desktop)) or
+            full_path.startswith(os.path.normpath(documents))):
+        return "Error: files can only be created under Desktop or Documents."
+
+    try:
+        parent = os.path.dirname(full_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        try:
+            ext_lower = os.path.splitext(full_path)[1].lower()
+            if ext_lower in (".html", ".htm"):
+                import webbrowser as _wb
+                _wb.open(full_path)
+            else:
+                subprocess.Popen(["explorer", "/select,", full_path])
+        except Exception:
+            pass
+
+        return f"Created file: {full_path}"
+    except Exception as e:
+        return f"Error creating file: {e}"
 
 
 # ===================================================================
@@ -55,7 +199,6 @@ def _handle_search_in_app(arguments):
 
 
 def _handle_create_file(arguments, user_input="", quick_chat_fn=None):
-    from brain_defs import _execute_create_file
     return _execute_create_file(
         arguments.get("path", ""),
         arguments.get("content", ""),
