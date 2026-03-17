@@ -200,6 +200,114 @@ def _rollback_open_app(arguments, action_registry):
 
 
 # ===================================================================
+# Skill trainer handlers
+# ===================================================================
+
+def _handle_train_skills(arguments, action_registry=None):
+    """Train skills from curriculum or custom task list."""
+    try:
+        from skills import SkillTrainer
+        from brain import _brain_state  # get the live brain instance
+        brain = getattr(_brain_state, 'brain_instance', None)
+        if brain is None:
+            return "Brain not available for training."
+
+        tasks = arguments.get("tasks") or None
+        difficulty = arguments.get("difficulty", "intermediate")
+        if isinstance(tasks, str):
+            tasks = [t.strip() for t in tasks.split(",") if t.strip()]
+
+        trainer = SkillTrainer(
+            llm_fn=brain.quick_chat,
+            thinking_fn=getattr(brain, 'thinking_chat', brain.quick_chat),
+        )
+        report = trainer.train(tasks=tasks, difficulty=difficulty)
+        return (
+            f"Training complete: {report['succeeded']}/{report['total']} succeeded, "
+            f"{report['skills_saved']} skills saved, avg quality {report['avg_quality']}/100."
+        )
+    except Exception as e:
+        logger.error(f"train_skills failed: {e}")
+        return f"Training failed: {e}"
+
+
+def _handle_improve_skills(arguments, action_registry=None):
+    """Improve existing skills using deep LLM analysis."""
+    try:
+        from skills import SkillTrainer
+        from brain import _brain_state
+        brain = getattr(_brain_state, 'brain_instance', None)
+        if brain is None:
+            return "Brain not available for skill improvement."
+
+        skill_name = arguments.get("skill_name", "").strip()
+        trainer = SkillTrainer(
+            llm_fn=brain.quick_chat,
+            thinking_fn=getattr(brain, 'thinking_chat', brain.quick_chat),
+        )
+        if skill_name:
+            report = trainer.improve_one(skill_name)
+            if not report:
+                return f"Skill '{skill_name}' not found."
+            bumped = report.get("version_bumped", False)
+            return (
+                f"Skill '{skill_name}': score {report['old_score']}→{report['new_score']}. "
+                + (f"Improved: {'; '.join(report['improvements'][:2])}" if bumped else "No change needed.")
+            )
+        else:
+            report = trainer.improve_skills()
+            return (
+                f"Skill improvement done: {report['analyzed']} analyzed, "
+                f"{report['improved']} improved, {report['unchanged']} unchanged."
+            )
+    except Exception as e:
+        logger.error(f"improve_skills failed: {e}")
+        return f"Improvement failed: {e}"
+
+
+def _handle_suggest_workflow(arguments, action_registry=None):
+    """Suggest an optimal workflow for a complex task."""
+    try:
+        from skills import SkillTrainer
+        from brain import _brain_state
+        brain = getattr(_brain_state, 'brain_instance', None)
+        if brain is None:
+            return "Brain not available for workflow suggestion."
+
+        task = arguments.get("task", "").strip()
+        if not task:
+            return "Please provide a task description."
+
+        trainer = SkillTrainer(
+            llm_fn=brain.quick_chat,
+            thinking_fn=getattr(brain, 'thinking_chat', brain.quick_chat),
+        )
+        wf = trainer.suggest_workflow(task)
+        steps = wf.get("atomic_steps", [])
+        strategies = wf.get("error_strategies", [])
+        lines = [
+            f"Workflow for: {task}",
+            f"Algorithm: {wf.get('algorithm', 'linear')} | "
+            f"Confidence: {wf.get('confidence', 0)}% | "
+            f"Steps: {wf.get('estimated_steps', len(steps))}",
+            "",
+        ]
+        for s in steps:
+            lines.append(f"  {s['index']}. {s['description']}  [{s['tool']}]"
+                         + (f"  → fallback: {s['fallback']}" if s.get("fallback") else ""))
+        if strategies:
+            lines.append("\nError recovery:")
+            for strat in strategies[:3]:
+                lines.append(f"  • {strat}")
+        if wf.get("rationale"):
+            lines.append(f"\nRationale: {wf['rationale']}")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"suggest_workflow failed: {e}")
+        return f"Workflow suggestion failed: {e}"
+
+
+# ===================================================================
 # Verification functions (for open_app and google_search)
 # ===================================================================
 # These delegate to tools.verifier which already has the full logic.
@@ -410,6 +518,81 @@ def register_builtin_tools(registry: ToolRegistry):
         handler=_handle_search_skills,
         aliases=["find_skill", "list_skills", "skill_search"],
         primary_arg="query",
+        core=False,
+    ))
+
+    registry.register(ToolSpec(
+        name="train_skills",
+        description=(
+            "Train the skill library by generating optimized skill definitions for tasks. "
+            "Uses local LLM for decomposition and Anthropic thinking for quality analysis. "
+            "Use for: 'train skills', 'learn new skills', 'train on intermediate tasks'."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "string",
+                    "description": "Comma-separated task descriptions to train on. "
+                                   "If empty, uses built-in curriculum."
+                },
+                "difficulty": {
+                    "type": "string",
+                    "description": "Curriculum difficulty: basic | intermediate | advanced. "
+                                   "Default: intermediate.",
+                    "enum": ["basic", "intermediate", "advanced"],
+                },
+            },
+            "required": [],
+        },
+        handler=_handle_train_skills,
+        aliases=["learn_skills", "skill_training", "train", "generate_skills"],
+        core=False,
+    ))
+
+    registry.register(ToolSpec(
+        name="improve_skills",
+        description=(
+            "Analyze and improve existing skills using deep LLM reasoning. "
+            "Examines execution history, failure reflexions, and rewrites low-quality skills. "
+            "Use for: 'improve my skills', 'fix broken skills', 'improve skill open_youtube'."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "skill_name": {
+                    "type": "string",
+                    "description": "Name of a specific skill to improve. "
+                                   "If empty, improves all low-quality skills.",
+                },
+            },
+            "required": [],
+        },
+        handler=_handle_improve_skills,
+        aliases=["fix_skills", "skill_improve", "refine_skills", "optimize_skills"],
+        core=False,
+    ))
+
+    registry.register(ToolSpec(
+        name="suggest_workflow",
+        description=(
+            "Suggest an optimal workflow and algorithm for any complex task. "
+            "Returns: algorithm type, atomic steps with tools, error recovery strategies, "
+            "confidence score, and rationale. "
+            "Use for: 'how do I automate X', 'design workflow for Y', 'suggest steps for Z'."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "The complex task to design a workflow for.",
+                },
+            },
+            "required": ["task"],
+        },
+        handler=_handle_suggest_workflow,
+        aliases=["design_workflow", "workflow", "how_to_automate", "plan_task", "automation_plan"],
         core=False,
     ))
 

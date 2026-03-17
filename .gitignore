@@ -66,6 +66,14 @@ Desktop.ini
 .DS_Store
 battery-report.html
 
+# === Rust build artifacts ===
+crates/audio-capture/target/
+audio/bin/
+
+# === Data files (generated at runtime) ===
+data/*.pkl
+data/*.db
+
 # === Generated HTML/CSS from LLM ===
 calculator.html
 styles.css

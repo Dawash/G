@@ -119,6 +119,19 @@ class ChatProvider:
     def _call_api(self):
         raise NotImplementedError
 
+    def stream_response(self, messages_with_system):
+        """Fallback: non-streaming providers yield the full response as one token."""
+        try:
+            # Build a temporary message state to call _call_api
+            saved = self.messages[:]
+            self.messages = [m for m in messages_with_system if m["role"] != "system"]
+            result = self._call_api()
+            self.messages = saved
+            if result:
+                yield result
+        except Exception:
+            return
+
     def _trim_context(self):
         if len(self.messages) > MAX_CONTEXT_MESSAGES:
             self.messages = self.messages[-MAX_CONTEXT_MESSAGES:]
@@ -188,6 +201,47 @@ class OllamaProvider(ChatProvider):
             response.raise_for_status()
             data = response.json()
             return data["choices"][0]["message"]["content"]
+
+    def stream_response(self, messages_with_system):
+        """Stream tokens from Ollama one at a time.
+
+        Uses Ollama's native /api/chat with stream=True which returns NDJSON.
+        Each line is: {"message": {"content": "<token>"}, "done": false}
+
+        Args:
+            messages_with_system: List of {role, content} dicts including system message.
+
+        Yields:
+            str: Individual text tokens as they arrive from the model.
+        """
+        timeout = self._get_timeout()
+        try:
+            response = requests.post(
+                f"{self.ollama_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "messages": messages_with_system,
+                    "stream": True,
+                },
+                stream=True,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    content = data.get("message", {}).get("content", "")
+                    if content:
+                        yield content
+                    if data.get("done"):
+                        break
+                except (json.JSONDecodeError, KeyError):
+                    continue
+        except Exception as e:
+            logging.debug(f"Ollama stream_response failed: {e}")
+            return
 
     @staticmethod
     def is_available(ollama_url=None):
@@ -260,6 +314,48 @@ class OpenAIProvider(ChatProvider):
         data = response.json()
         return data["choices"][0]["message"]["content"]
 
+    def stream_response(self, messages_with_system):
+        """Stream tokens from OpenAI via SSE (Server-Sent Events).
+
+        Yields:
+            str: Individual text tokens as they arrive.
+        """
+        try:
+            response = requests.post(
+                self.BASE_URL,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "messages": messages_with_system,
+                    "stream": True,
+                },
+                stream=True,
+                timeout=120,
+            )
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                line = line.decode("utf-8") if isinstance(line, bytes) else line
+                if line.startswith("data: "):
+                    data_str = line[6:]
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(data_str)
+                        delta = data["choices"][0].get("delta", {})
+                        content = delta.get("content", "")
+                        if content:
+                            yield content
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+        except Exception as e:
+            logging.debug(f"OpenAI stream_response failed: {e}")
+            return
+
 
 class AnthropicProvider(ChatProvider):
     """Anthropic API (Claude models)."""
@@ -267,30 +363,117 @@ class AnthropicProvider(ChatProvider):
     BASE_URL = "https://api.anthropic.com/v1/messages"
     DEFAULT_MODEL = "claude-sonnet-4-20250514"
 
+    # Models that support extended thinking (exclude haiku)
+    _THINKING_CAPABLE = ("claude-opus-4", "claude-sonnet-4", "claude-3-7")
+
     def __init__(self, api_key, system_prompt, model=None):
         super().__init__(api_key, system_prompt)
         self.provider_name = "anthropic"
         self.model = model or self.DEFAULT_MODEL
 
+    def _supports_thinking(self) -> bool:
+        """Check if the current model supports extended thinking."""
+        m = self.model.lower()
+        return any(x in m for x in self._THINKING_CAPABLE) and "haiku" not in m
+
     def _call_api(self):
+        thinking_enabled = self._supports_thinking()
+        max_tokens = 8000 if thinking_enabled else 2048
+
+        payload = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": self.messages,
+        }
+
+        # System prompt as cached array for prompt caching
+        payload["system"] = [
+            {
+                "type": "text",
+                "text": self.system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+        # Extended thinking — requires temperature=1, omitted so it defaults to 1
+        if thinking_enabled:
+            payload["thinking"] = {"type": "enabled", "budget_tokens": 3000}
+
         response = requests.post(
             self.BASE_URL,
             headers={
                 "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
+                "anthropic-version": "2024-06-01",
                 "Content-Type": "application/json",
+                "anthropic-beta": "prompt-caching-2024-07-16",
             },
-            json={
-                "model": self.model,
-                "max_tokens": 1024,
-                "system": self.system_prompt,
-                "messages": self.messages,
-            },
+            json=payload,
             timeout=120,
         )
         response.raise_for_status()
         data = response.json()
-        return data["content"][0]["text"]
+
+        # Extract text blocks only (skip thinking blocks from spoken output)
+        text_parts = []
+        for block in data.get("content", []):
+            if block.get("type") == "thinking":
+                logging.debug(f"[Claude thinking] {block.get('thinking', '')[:400]}")
+            elif block.get("type") == "text":
+                text_parts.append(block.get("text", ""))
+
+        return " ".join(text_parts) if text_parts else ""
+
+    def stream_response(self, messages_with_system):
+        """Stream tokens from Anthropic via SSE.
+
+        Yields:
+            str: Individual text tokens as they arrive.
+        """
+        try:
+            # Pull system out of messages_with_system if present
+            system_text = self.system_prompt
+            user_messages = [m for m in messages_with_system if m["role"] != "system"]
+
+            response = requests.post(
+                self.BASE_URL,
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2024-06-01",
+                    "Content-Type": "application/json",
+                    "Accept": "text/event-stream",
+                },
+                json={
+                    "model": self.model,
+                    "max_tokens": 1024,
+                    "system": system_text,
+                    "messages": user_messages,
+                    "stream": True,
+                },
+                stream=True,
+                timeout=120,
+            )
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                line = line.decode("utf-8") if isinstance(line, bytes) else line
+                if line.startswith("data: "):
+                    data_str = line[6:]
+                    try:
+                        data = json.loads(data_str)
+                        if data.get("type") == "content_block_delta":
+                            delta = data.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                text = delta.get("text", "")
+                                if text:
+                                    yield text
+                        elif data.get("type") == "message_stop":
+                            break
+                    except (json.JSONDecodeError, KeyError):
+                        continue
+        except Exception as e:
+            logging.debug(f"Anthropic stream_response failed: {e}")
+            return
 
 
 def create_provider(provider_name, api_key, system_prompt, ollama_model=None, ollama_url=None, model=None):

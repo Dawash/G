@@ -102,7 +102,7 @@ def _llm_call(prompt, max_tokens=200, temperature=0.3):
                 "https://api.anthropic.com/v1/messages",
                 headers={
                     "x-api-key": cfg["api_key"],
-                    "anthropic-version": "2023-06-01",
+                    "anthropic-version": "2024-06-01",
                     "Content-Type": "application/json",
                 },
                 json={

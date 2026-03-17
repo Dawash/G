@@ -58,6 +58,8 @@ from core.control_flags import (
     start_hotkey_listener,
 )
 from core.state import RuntimeState
+from core.event_bus import bus
+from core.topics import Topics
 
 logger = logging.getLogger(__name__)
 
@@ -102,45 +104,101 @@ def _split_first_sentence(text):
 
 
 def _say_streaming(ainame, text):
-    """Print full response, then start speaking first sentence immediately.
+    """Print full response, then speak all sentences individually via TTS.
 
-    While the first sentence plays, the caller can do housekeeping (memory
-    logging, etc.). Then speaks the remaining text with barge-in support.
-
-    This cuts perceived latency by 0.3-0.8s for multi-sentence responses
-    by overlapping first-sentence TTS with post-brain processing.
+    Splits the complete response into sentences and feeds each to TTS one at
+    a time using speak_stream(). Per-sentence delivery enables barge-in
+    detection between sentences and avoids TTS processing the whole block.
 
     Returns:
-        str or None: User's barge-in text if they interrupted, else None.
+        str or None: User's barge-in text if interrupted, else None.
     """
-    # Text mode: no TTS, just print
     if os.environ.get("G_INPUT_MODE", "").lower() == "text":
         return say(ainame, text, speak_interruptible)
 
-    # Print full response to console immediately
     print(f"{ainame}: {text}")
 
-    # Truncate code-heavy / long responses for TTS
     speak_text = truncate_for_speech(text)
+    if not speak_text.strip():
+        return None
 
-    first, remainder = _split_first_sentence(speak_text)
+    try:
+        from speech import speak_stream
 
-    if not remainder:
-        # Single sentence or too short to split — use normal interruptible path
-        return speak_interruptible(speak_text)
+        # Split already-complete text on sentence boundaries directly
+        # No need for iter_sentences() — the text isn't a token stream
+        sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z"\'])', speak_text)
+        # Handle single sentence or sentences ending in non-standard ways
+        if len(sentences) == 1:
+            sentences = re.split(r'(?<=[.!?])\s+', speak_text)
 
-    # Multi-sentence: speak first sentence immediately (blocking),
-    # then speak remainder with barge-in support
-    speak(first)
+        def _sentence_gen():
+            for s in sentences:
+                s = s.strip()
+                if s:
+                    bus.publish(Topics.TTS_SENTENCE, {"sentence": s}, source="assistant_loop")
+                    yield s
 
-    # Speak remaining text with barge-in monitoring
-    interrupted = speak_interruptible(remainder)
-    return interrupted
+        interrupted = speak_stream(_sentence_gen())
+        bus.publish(
+            Topics.TTS_INTERRUPTED if interrupted else Topics.TTS_COMPLETED,
+            {"interrupted": bool(interrupted)},
+            source="assistant_loop",
+        )
+        return interrupted
+    except Exception:
+        # Fallback
+        first, remainder = _split_first_sentence(speak_text)
+        if not remainder:
+            return speak_interruptible(speak_text)
+        speak(first)
+        return speak_interruptible(remainder)
 
 
 def _llm_response(brain, situation, user_input, uname, fast_key=None):
     """Generate fresh LLM response for meta-situations."""
     return llm_response(brain, situation, user_input, uname, fast_key=fast_key)
+
+
+def _say_quick_stream(ainame, brain, prompt):
+    """Speak a brain response that streams token-by-token to TTS.
+
+    Used for meta-command LLM responses (goodbye, undo ack, etc.) where
+    we want sub-200ms first-word latency by streaming the LLM output
+    directly through sentence_buffer → speak_stream.
+
+    Falls back to normal quick_chat + speak if streaming unavailable.
+
+    Returns:
+        str or None: Barge-in text if interrupted, else None.
+    """
+    if os.environ.get("G_INPUT_MODE", "").lower() == "text":
+        result = brain.quick_chat(prompt)
+        if result:
+            print(f"{ainame}: {result}")
+        return None
+
+    try:
+        from speech import speak_stream
+        full_text_parts = []
+
+        def _sentence_gen():
+            for sentence in brain.stream_quick_chat(prompt):
+                full_text_parts.append(sentence)
+                yield sentence
+
+        interrupted = speak_stream(_sentence_gen())
+        full_text = " ".join(full_text_parts)
+        if full_text:
+            print(f"{ainame}: {full_text}")
+        return interrupted
+    except Exception:
+        # Fallback to non-streaming
+        result = brain.quick_chat(prompt)
+        if result:
+            print(f"{ainame}: {result}")
+            return speak_interruptible(result)
+        return None
 
 
 def _api_limited():
@@ -306,6 +364,38 @@ def run(runtime_state=None):
     _workflow_registry = WorkflowRegistry()
     set_workflow_registry(_workflow_registry)
 
+    # Multi-model router — initialize from config (opt-in, non-blocking)
+    try:
+        from llm.model_router import model_router as _model_router
+        _model_router.setup_from_config(config)
+        logger.info("Multi-model router initialized")
+    except Exception as _mr_err:
+        logger.debug(f"Model router init skipped: {_mr_err}")
+
+    # Advanced 3-layer memory — initialize singleton (non-blocking)
+    _adv_memory = None
+    try:
+        from memory.memory_api import memory as _adv_memory
+        logger.info(f"Advanced memory initialized: {_adv_memory.get_stats()['episodic']}")
+    except Exception as _mem_err:
+        logger.debug(f"Advanced memory init skipped: {_mem_err}")
+
+    # Rust audio pipeline — detect and report availability (non-blocking, optional)
+    _rust_audio = None
+    try:
+        from audio.rust_audio import is_rust_audio_available, get_audio_backend, BINARY_PATH
+        if is_rust_audio_available():
+            _rust_audio = get_audio_backend()
+            logger.info("Rust audio pipeline available — 30ms VAD frames active")
+            print("  [Audio] Rust audio pipeline detected (30ms VAD frames)")
+        else:
+            logger.debug(
+                "Rust audio binary not found at %s — using Python VAD. "
+                "Build with: python crates/build.py", BINARY_PATH
+            )
+    except Exception as _ra_err:
+        logger.debug(f"Rust audio init skipped: {_ra_err}")
+
     action_map = build_action_map(reminder_mgr, provider, memory, config)
 
     brain = Brain(
@@ -318,6 +408,7 @@ def run(runtime_state=None):
         ollama_model=ollama_model,
         user_preferences=preferences,
         ollama_url=ollama_url,
+        cloud_model=cloud_model,
     )
 
     # Session continuity — restore previous session
@@ -360,6 +451,42 @@ def run(runtime_state=None):
     threading.Thread(target=start_hotkey_listener, daemon=True).start()
     threading.Thread(target=brain.warm_up, daemon=True).start()
 
+    # Phase 2a: Awareness system — starts perception threads + event-bus subscriptions
+    # Must start BEFORE brain.warm_up completes so context is populated for first LLM call
+    try:
+        from core.awareness_state import awareness as _awareness
+        from core.awareness_updater import start_awareness_updates
+        _awareness.update(user_name=uname)
+        start_awareness_updates()
+        logger.info("Awareness system started (time/window/system/clipboard monitors)")
+    except Exception as _aw_err:
+        logger.debug(f"Awareness system init skipped: {_aw_err}")
+
+    # Phase 2b-proactive: Proactive Intelligence Engine — 13 built-in triggers
+    _proactive = None
+    try:
+        from core.triggers.registry import register_all_triggers
+        from core.proactive_engine import proactive_engine as _proactive
+
+        _trigger_count = register_all_triggers()
+        _proactive.load_state()          # restore acceptance history from last run
+        _proactive.start()
+
+        # Wire urgent (speak_now) suggestions to immediate TTS
+        @bus.on("proactive.speak_now", run_async=True)
+        def _handle_urgent_proactive(event):
+            msg = event.payload.get("message", "")
+            if msg:
+                try:
+                    print(f"{ainame}: [Proactive] {msg}")
+                    speak(msg)
+                except Exception:
+                    pass
+
+        logger.info(f"Proactive engine started with {_trigger_count} triggers")
+    except Exception as _pe_err:
+        logger.debug(f"Proactive engine init skipped: {_pe_err}")
+
     # Phase 2b: Load plugins (Mycroft-style skill system)
     try:
         from plugins.loader import PluginLoader
@@ -397,6 +524,31 @@ def run(runtime_state=None):
         logger.info(f"JARVIS engine: {_jarvis.registry.count} skills ready")
     except Exception as e:
         logger.debug(f"JARVIS engine init: {e}")
+
+    # Phase 2d: HUD Overlay — JARVIS visual dashboard (always-on, port 8767)
+    _hud_server = None
+    _hud_command_queue: list[str] = []
+    _hud_cmd_lock = threading.Lock()
+    if config.get("hud_enabled", True):
+        try:
+            from hud.server import start_hud_server as _start_hud
+            hud_port = config.get("hud_port", 8767)
+            if _start_hud(port=hud_port):
+                logger.info(f"HUD overlay started on http://localhost:{hud_port}")
+                print(f"  [HUD] Open http://localhost:{hud_port} for the JARVIS dashboard")
+
+                # Route HUD text commands back into the main listen loop
+                @bus.on(Topics.HUD_COMMAND)
+                def _on_hud_command(event):
+                    text = event.payload.get("text", "").strip()
+                    if text:
+                        with _hud_cmd_lock:
+                            _hud_command_queue.append(text)
+
+                from hud.server import get_hud_server
+                _hud_server = get_hud_server()
+        except Exception as _hud_err:
+            logger.debug(f"HUD server init skipped: {_hud_err}")
 
     ollama_was_down = [False]
     _start_ollama_health_monitor(provider_name, ollama_was_down, ollama_url=ollama_url)
@@ -460,10 +612,20 @@ def run(runtime_state=None):
         except Exception:
             pass
 
+    bus.publish(Topics.STARTUP_COMPLETE, {
+        "provider": provider_name,
+        "model": ollama_model,
+        "ainame": ainame,
+    }, source="assistant_loop")
+
     is_connected = True
     interaction_count = 0
     _last_session_save = time.time()
     _barge_in_text = None  # Carries barge-in input across loop iterations
+    _recent_commands = []          # Last 10 user inputs for repetition detection
+    _proactive_cooldowns = {}      # {topic: last_suggested_time} — rate limits
+    _last_tool_used = None         # Tool name from last brain call
+    _last_tool_success = True      # Whether last tool succeeded
 
     # === MAIN LOOP ===
     while True:
@@ -476,9 +638,14 @@ def run(runtime_state=None):
                 woke = listen_for_wake_word(timeout_s=None)
                 if woke:
                     _ss.set_mode("ACTIVE")
-                    greet = _llm_response(brain, "user just said the wake word, greet them briefly",
-                                          f"Hey {ainame}", uname, fast_key="wake")
-                    _say(ainame, greet)
+                    bus.publish(Topics.WAKE_WORD_DETECTED, {"ainame": ainame}, source="assistant_loop")
+                    bus.publish(Topics.STATE_ACTIVE, {"reason": "wake_word"}, source="assistant_loop")
+                    _say_quick_stream(
+                        ainame, brain,
+                        f"User just woke you up by saying the wake word. Give a brief friendly greeting as {ainame}."
+                    )
+                else:
+                    bus.publish(Topics.STATE_IDLE, {"reason": "no_wake_word"}, source="assistant_loop")
                 continue
 
         # Auto-sleep after inactivity (voice mode only)
@@ -486,6 +653,7 @@ def run(runtime_state=None):
         if should_auto_sleep(_ss, is_text_mode=_is_text):
             _ss.set_mode("IDLE")
             _ss.last_mode_was_agent = False
+            bus.publish(Topics.STATE_IDLE, {"reason": "inactivity"}, source="assistant_loop")
             _say(ainame, f"Going to sleep. Say Hey {ainame} to wake me.")
             continue
 
@@ -513,6 +681,14 @@ def run(runtime_state=None):
             user_input = _barge_in_text
             _barge_in_text = None
             interrupted = user_input  # skip listen()
+
+        # Pick up commands typed in the HUD browser dashboard
+        if not interrupted:
+            with _hud_cmd_lock:
+                if _hud_command_queue:
+                    user_input = _hud_command_queue.pop(0)
+                    interrupted = user_input
+
         if not interrupted:
             _debug_trace("waiting for listen()")
             user_input = listen()
@@ -522,6 +698,7 @@ def run(runtime_state=None):
 
         _ss.touch()
         user_input = correct_speech(user_input)
+        bus.publish(Topics.INPUT_RECEIVED, {"text": user_input}, source="assistant_loop")
 
         # Auto-save session every 60 seconds
         if time.time() - _last_session_save > 60:
@@ -535,16 +712,23 @@ def run(runtime_state=None):
         interaction_count += 1
         logger.info(f"Loop #{interaction_count}: got input '{user_input[:50]}'")
         memory.log_event(session_id, "user_input", {"text": user_input})
+        _recent_commands.append(user_input)
+        if len(_recent_commands) > 10:
+            _recent_commands.pop(0)
 
-        # Proactive habit suggestions every 20 interactions
-        if interaction_count > 0 and interaction_count % 20 == 0:
-            try:
-                habit_suggestions = habits.suggest_proactive_actions()
-                for suggestion in habit_suggestions[:2]:
-                    print(f"[SUGGESTION] {suggestion}")
-                    logger.info(f"Habit suggestion: {suggestion}")
-            except Exception:
-                pass
+        # Smart proactive suggestion (replaces every-20 counter)
+        # Fires on context triggers: post-task / repetition / keyword / failure
+        try:
+            _suggestion = habits.smart_proactive_check(
+                user_input, _last_tool_used, _last_tool_success,
+                _recent_commands, _proactive_cooldowns
+            )
+            if _suggestion:
+                logger.info(f"Smart suggestion: {_suggestion}")
+                # Speak suggestion naturally, don't shout — append to next response
+                _ss.pending_suggestion = _suggestion
+        except Exception:
+            pass
 
         # Every 50 interactions, log session feedback summary
         if interaction_count > 0 and interaction_count % 50 == 0:
@@ -605,10 +789,19 @@ def run(runtime_state=None):
             except Exception:
                 pass
             memory.close()
-            farewell = _llm_response(brain, "user is saying goodbye, give a warm farewell",
-                                     user_input, uname, fast_key="farewell")
-            print(f"{ainame}: {farewell}")
-            speak(farewell)
+            if _proactive:
+                try:
+                    _proactive.save_state()
+                    _proactive.stop()
+                except Exception:
+                    pass
+            bus.publish(Topics.SHUTDOWN, {"reason": "user_exit", "input": user_input},
+                        source="assistant_loop")
+            bus.shutdown()
+            _say_quick_stream(
+                ainame, brain,
+                f"The user just said '{user_input}'. Give a warm, brief farewell as {ainame}."
+            )
             break
 
         conn_cmd = is_connection_command(user_input)
@@ -729,6 +922,15 @@ def run(runtime_state=None):
         if _fp_result.handled and _fp_result.response is not None:
             _ss.last_response = str(_fp_result.response)
             logger.info(f"Fast-path: {_fp_result.handler_key} -> {str(_fp_result.response)[:60]}")
+            bus.publish(Topics.FAST_PATH_MATCHED, {
+                "handler": _fp_result.handler_key or "multi_step",
+                "response": str(_fp_result.response)[:200],
+                "elapsed_ms": round(_fp_elapsed * 1000, 1),
+            }, source="assistant_loop")
+            bus.publish(Topics.RESPONSE_READY, {
+                "text": str(_fp_result.response),
+                "mode": "fast_path",
+            }, source="assistant_loop")
             _say(ainame, _fp_result.response)
             memory.log_event(session_id, "fast_path",
                              {"handler": _fp_result.handler_key or "multi_step",
@@ -901,6 +1103,11 @@ def run(runtime_state=None):
                     continue
 
                 _ss.last_response = response
+                bus.publish(Topics.RESPONSE_READY, {
+                    "text": response,
+                    "mode": "brain",
+                    "elapsed_ms": round(_elapsed * 1000, 1),
+                }, source="assistant_loop")
                 _debug_trace(f"Loop#{interaction_count} pre-say")
                 # Use streaming TTS: first sentence starts playing immediately
                 # while memory logging happens in parallel
@@ -910,6 +1117,24 @@ def run(runtime_state=None):
                           {"input": user_input, "response": str(response)[:200]}),
                 )
                 _mem_thread.start()
+                # Advanced memory: log episode + update working memory context
+                if _adv_memory is not None:
+                    try:
+                        _trace = getattr(brain, 'last_call_trace', {})
+                        _tools_used = [t.get('name', '') for t in _trace.get('tool_calls', [])]
+                        _adv_elapsed = round(_elapsed * 1000)
+                        threading.Thread(
+                            target=_adv_memory.learn_from_turn, daemon=True,
+                            kwargs={
+                                "user_input": user_input,
+                                "response": str(response)[:500],
+                                "tools": _tools_used or None,
+                                "success": True,
+                                "duration_ms": _adv_elapsed,
+                            },
+                        ).start()
+                    except Exception:
+                        pass
                 # Log usage for habit tracking (enables proactive suggestions)
                 try:
                     _trace = getattr(brain, 'last_call_trace', {})
@@ -921,6 +1146,24 @@ def run(runtime_state=None):
                             _entity = _tool_args.get('app_name', _tool_args.get('query', _tool_args.get('url', '')))
                             if _tool_name:
                                 memory.log_usage(_tool_name, str(_entity)[:50] if _entity else '')
+                        # Update last tool for smart proactive suggestions
+                        _last_tool_used = _tool_calls[-1].get('name', None)
+                        _last_tool_success = not any(
+                            w in str(response).lower()
+                            for w in ["failed", "error", "not found", "couldn't"]
+                        )
+                    else:
+                        _last_tool_used = None
+                        _last_tool_success = True
+                except Exception:
+                    pass
+
+                # Append pending smart suggestion to response if present
+                try:
+                    _pending = getattr(_ss, 'pending_suggestion', None)
+                    if _pending:
+                        _ss.pending_suggestion = None
+                        response = str(response) + f"  Also — {_pending}"
                 except Exception:
                     pass
                 interrupted = _say_streaming(ainame, response)
@@ -935,6 +1178,16 @@ def run(runtime_state=None):
                 if interrupted:
                     _barge_in_text = interrupted
                     memory.log_event(session_id, "barge_in", {"text": interrupted})
+                    continue
+
+                # Deliver any queued proactive suggestion at the natural pause
+                if _proactive:
+                    try:
+                        _proactive_msg = _proactive.get_pending_suggestion()
+                        if _proactive_msg:
+                            _say_streaming(ainame, f"By the way — {_proactive_msg}")
+                    except Exception:
+                        pass
                 continue
 
         # Dead key warning (once)
@@ -989,6 +1242,11 @@ def run(runtime_state=None):
         logger.error(f"Main loop error (recovering): {e}", exc_info=True)
         print(f"\n[Recovery] Something went wrong: {e}")
         print("[Recovery] Continuing... say something to keep going.\n")
+        try:
+            bus.publish(Topics.LOOP_ERROR, {"error": str(e), "type": type(e).__name__},
+                        source="assistant_loop")
+        except Exception:
+            pass
         try:
             memory.log_event(session_id, "crash_recovery", {"error": str(e)})
         except Exception:

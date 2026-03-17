@@ -59,19 +59,22 @@ class SwarmOrchestrator:
         self._replan_count = 0
         self._actions_since_critique = 0
 
-        # Initialize agents with shared blackboard
-        llm_fn = brain.quick_chat
-        self._planner = PlannerAgent(llm_fn, self._bb)
+        # Model routing: Planner and Critic use thinking LLM for better reasoning;
+        # Executor, Researcher, Memory use fast LLM to stay within budget.
+        fast_llm = brain.quick_chat
+        thinking_llm = getattr(brain, 'thinking_chat', brain.quick_chat)
+
+        self._planner = PlannerAgent(thinking_llm, self._bb)
         self._executor = ExecutorAgent(
-            llm_fn, self._bb,
+            fast_llm, self._bb,
             brain=brain,
             action_registry=brain.action_registry,
             speak_fn=speak_fn,
         )
-        self._critic = CriticAgent(llm_fn, self._bb)
-        self._researcher = ResearcherAgent(llm_fn, self._bb)
-        self._memory = MemoryAgent(llm_fn, self._bb)
-        self._debate = DebateAgent(llm_fn, self._bb)
+        self._critic = CriticAgent(thinking_llm, self._bb)
+        self._researcher = ResearcherAgent(fast_llm, self._bb)
+        self._memory = MemoryAgent(fast_llm, self._bb)
+        self._debate = DebateAgent(fast_llm, self._bb)
 
     def execute(self, goal: str) -> str:
         """Execute a complex goal using the multi-agent team.

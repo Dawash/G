@@ -469,6 +469,53 @@ _recent_actions = _brain_state.recent_actions
 _state_lock = _brain_state._lock
 _response_cache = _brain_state.response_cache
 
+
+def _naturalize_skill_result(user_input: str, tool_sequence: list,
+                              raw_result: str, prefix: str = "") -> str | None:
+    """Template-based skill response — avoids a full LLM round-trip (~60-150s).
+
+    Returns a natural spoken confirmation string for common tool patterns,
+    or None if the output is too unusual and needs LLM naturalization.
+    """
+    # Determine primary tool
+    primary_tool = tool_sequence[0].get("tool", "") if tool_sequence else ""
+    args0 = tool_sequence[0].get("args", {}) if tool_sequence else {}
+
+    raw_lower = raw_result.lower()
+
+    # Template table: (tool, result_keywords) → response
+    _templates = [
+        ("open_app",       None,  lambda: f"Opened {args0.get('app_name', args0.get('name', 'the app'))}."),
+        ("close_app",      None,  lambda: f"Closed {args0.get('app_name', args0.get('name', 'the app'))}."),
+        ("set_reminder",   None,  lambda: "Reminder set."),
+        ("take_screenshot",None,  lambda: "Screenshot taken."),
+        ("get_time",       None,  lambda: raw_result.strip()),
+        ("get_weather",    None,  lambda: raw_result.strip() if len(raw_result) < 120 else None),
+        ("get_news",       None,  lambda: "Here are the latest headlines." if len(raw_result) > 100 else raw_result.strip()),
+        ("google_search",  None,  lambda: "Done — search results opened."),
+        ("play_music",     None,  lambda: f"Playing music."),
+        ("create_file",    None,  lambda: f"File created."),
+        ("run_terminal",   None,  lambda: raw_result.strip() if len(raw_result) < 150 else None),
+        ("system_command", None,  lambda: "Done."),
+        ("send_email",     None,  lambda: "Email sent."),
+        ("browser_action", None,  lambda: "Done." if len(raw_result) < 50 else None),
+        ("minimize_app",   None,  lambda: "Minimized."),
+    ]
+
+    for tool, _kw, fmt_fn in _templates:
+        if primary_tool == tool:
+            val = fmt_fn()
+            if val is None:
+                return None  # Signal: use LLM
+            return f"{prefix}{val}" if prefix else val
+
+    # Short raw result (<80 chars) → just return it directly, no LLM needed
+    if len(raw_result.strip()) < 80:
+        return f"{prefix}{raw_result.strip()}" if prefix else raw_result.strip()
+
+    # Long/complex result → signal LLM needed
+    return None
+
 # Track last created file for pronoun resolution ("open it")
 # Migrated to _brain_state.last_created_file (core.state.BrainState)
 
@@ -1432,7 +1479,7 @@ class Brain:
 
     def __init__(self, provider_name, api_key, username, ainame,
                  action_registry, reminder_mgr=None, ollama_model=None,
-                 user_preferences=None, ollama_url=None):
+                 user_preferences=None, ollama_url=None, cloud_model=None):
         self.provider_name = provider_name
         self.api_key = api_key
         self.username = username
@@ -1456,6 +1503,8 @@ class Brain:
         except ImportError:
             DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
         self.ollama_model = ollama_model or DEFAULT_OLLAMA_MODEL
+        # Cloud model for Anthropic (and OpenAI/OpenRouter) calls
+        self.anthropic_model = cloud_model or "claude-sonnet-4-20250514"
 
         # Determine tool-calling mode
         self._use_native_tools = True  # Default: try native tools
@@ -1475,6 +1524,9 @@ class Brain:
 
         # Track if native tools failed (auto-fallback, recoverable)
         self._native_tools_failed = False
+
+        # Register self on shared state so tool handlers (train_skills etc.) can reach the brain
+        _brain_state.brain_instance = self
         self._prompt_mode_calls = 0        # calls since switching to prompt mode
         self._PROMPT_MODE_RETRY = 2        # retry native after N prompt-mode calls (fast recovery)
 
@@ -1550,9 +1602,14 @@ class Brain:
             matches = self._skill_lib.find_skill(user_input, min_similarity=0.7, limit=1)
             if matches:
                 match = matches[0]
+                # Skip low-quality skills — they contain vague/incomplete sequences
+                q = match.get("quality_score", 0)
+                if q > 0 and q < 50:
+                    logger.info(f"Skill {match['name']} skipped — quality too low ({q})")
+                    return None
                 logger.info(f"Skill library match: {match['name']} "
                             f"(similarity={match['similarity']:.2f}, "
-                            f"used {match['success_count']}x)")
+                            f"used {match['success_count']}x, q={q})")
 
                 # Check if required credentials are available
                 ok, missing = self._skill_lib.check_credentials(match["name"])
@@ -2546,15 +2603,23 @@ class Brain:
                 logger.debug(f"Plugin check error: {e}")
 
         # --- JARVIS SKILL ENGINE (complex multi-step requests) ---
-        # For requests with "and" or multiple verbs, try JARVIS planner
-        # which decomposes into skill chains instead of single LLM call
+        # Gate: only fire JARVIS when mode classifier confirms the request is
+        # genuinely multi-step (agent/research). The old word-count heuristic
+        # (>= 8 words) was incorrectly firing on "what is the weather forecast
+        # for today?" (8 words) adding 45s of timeout risk to trivial requests.
         global _jarvis_engine
-        if _jarvis_engine and (
-            " and " in user_input.lower()
-            or " then " in user_input.lower()
-            or " after " in user_input.lower()
-            or len(user_input.split()) >= 8
-        ):
+        _jarvis_mode = None
+        if _jarvis_engine:
+            try:
+                from llm.mode_classifier import classify_mode
+                _decision = classify_mode(user_input)
+                _jarvis_mode = _decision.mode
+            except Exception:
+                # Fallback: old heuristic if classifier unavailable
+                _has_connector = any(w in user_input.lower()
+                    for w in [" and then ", " then ", " after that "])
+                _jarvis_mode = "agent" if _has_connector else "quick"
+        if _jarvis_engine and _jarvis_mode in ("agent", "research"):
             try:
                 jarvis_result = _jarvis_engine.run(user_input, timeout=45)
                 if jarvis_result:
@@ -2604,12 +2669,24 @@ class Brain:
                 # Set user input for tool validation (prevents stale input issues)
                 execute_tool._last_user_input = user_input
                 # Replay the skill's tool sequence
+                _SEARCH_TOOLS = {"google_search", "play_music", "search_in_app",
+                                 "web_search_answer", "web_read"}
+                _QUERY_KEYS   = {"query", "song", "search_term", "keywords", "q"}
                 results = []
                 for tc in skill_match["tool_sequence"]:
                     tool = tc.get("tool", "")
                     args = tc.get("args", {}) or {}
                     if not tool:
                         continue
+
+                    # Arg substitution: for search/query tools when similarity < 0.90,
+                    # replace stored search terms with the actual user request so
+                    # "play rock" doesn't replay stored "play jazz" args.
+                    if tool in _SEARCH_TOOLS and _skill_sim < 0.90:
+                        sub_key = next((k for k in _QUERY_KEYS if k in args), None)
+                        if sub_key:
+                            args = dict(args)
+                            args[sub_key] = user_input
 
                     # Pre-condition check: skip open_app if the app is already running
                     if tool == "open_app":
@@ -2642,17 +2719,23 @@ class Brain:
                 if results:
                     self._skill_lib.record_use(skill_match["name"], success=True)
                     _prefix = "(low-confidence skill) " if _low_confidence else ""
-                    # Naturalize skill result for voice — raw tool output is robotic
                     _raw = results[-1] if results else ""
-                    try:
-                        _skill_response = self.quick_chat(
-                            f"The task '{user_input}' completed. Result: {_raw}. "
-                            f"Give a brief natural spoken confirmation (1 sentence)."
-                        )
-                        if not _skill_response or len(_skill_response) < 5:
-                            _skill_response = f"{_prefix}Done — {_raw}"
-                    except Exception:
-                        _skill_response = f"{_prefix}Done — {_raw}"
+                    # Fast-path naturalization via template lookup (avoids 60-150s LLM call)
+                    # Only use LLM if result is long/unusual and needs real summarization
+                    _skill_response = _naturalize_skill_result(
+                        user_input, skill_match["tool_sequence"], _raw, _prefix
+                    )
+                    if _skill_response is None:
+                        # Unusual output — fall back to LLM naturalization
+                        try:
+                            _skill_response = self.quick_chat(
+                                f"The task '{user_input}' completed. Result: {_raw[:200]}. "
+                                f"Give a brief natural spoken confirmation (1 sentence)."
+                            )
+                            if not _skill_response or len(_skill_response) < 5:
+                                _skill_response = f"{_prefix}Done."
+                        except Exception:
+                            _skill_response = f"{_prefix}Done."
                     self._ctx.append({"role": "assistant", "content": _skill_response})
                     self._ctx.trim()
                     return _skill_response
@@ -2715,6 +2798,15 @@ class Brain:
         if ambient:
             self.system_prompt += f"\n\nCONTEXT: {ambient}"
 
+        # Inject AwarenessState context (live perception: time, system, app, activity)
+        try:
+            from core.context_injector import build_context as _build_awareness_ctx
+            _awareness_ctx = _build_awareness_ctx(user_input)
+            if _awareness_ctx:
+                self.system_prompt += f"\n\n{_awareness_ctx}"
+        except Exception:
+            pass
+
         # Cognitive Phase 6: prompt adjustment from learned patterns
         if self._cognition:
             try:
@@ -2758,6 +2850,13 @@ class Brain:
         # handles compound requests via regex (0ms) instead of LLM (6.5s).
         # See: llm/mode_classifier.py SMART DECOMPOSITION section.
 
+        # Collapse previous turn's tool messages BEFORE trimming.
+        # Old order was: trim → LLM → collapse(after LLM).
+        # Problem: the LLM was seeing the uncollapsed tool messages from the
+        # previous turn in its context window, filling it with raw [Tool: ...]
+        # outputs instead of clean conversation history.
+        # New order: collapse previous turn → trim → LLM call.
+        self._collapse_completed_turn(None)   # collapse last turn if not yet done
         self.messages.append({"role": "user", "content": user_input})
         self._trim_context()
 
@@ -2945,6 +3044,63 @@ class Brain:
             logger.error(f"Brain error: {e}", exc_info=True)
             return None
 
+    def stream_think(self, user_input, detected_language=None):
+        """Generator version of think() — yields final response as sentences.
+
+        Runs the ENTIRE think() tool-calling loop identically to think(), but
+        for the final LLM synthesis response, streams tokens through
+        iter_sentences() so the caller gets sentences as they complete.
+
+        This enables the assistant loop to pipe output directly to speak_stream()
+        for lower perceived latency:
+            speak_stream(brain.stream_think("what's the weather?"))
+
+        Falls back to yielding the full think() result as one chunk on any error.
+
+        Yields:
+            str: Speakable sentences in order (final response only).
+        """
+        try:
+            from llm.sentence_buffer import iter_sentences
+        except ImportError:
+            iter_sentences = None
+
+        # Run the full think() loop first (all tool calls, all reasoning)
+        # stream_think does NOT stream intermediate tool-call steps — only the
+        # final synthesis response is streamed sentence-by-sentence.
+        try:
+            result = self.think(user_input, detected_language=detected_language)
+        except Exception as e:
+            logger.debug(f"stream_think: think() raised: {e}")
+            return
+
+        if not result:
+            return
+
+        # If iter_sentences is unavailable, yield the full result as one chunk
+        if iter_sentences is None:
+            yield result
+            return
+
+        # Split the final result into sentences and yield them one by one.
+        # This uses iter_sentences on a trivial single-string "token stream"
+        # so sentence boundary logic is consistent with speak_stream().
+        try:
+            def _single_token_stream(text):
+                # Yield the full text as a single token so iter_sentences can split it
+                yield text
+
+            full_text = ""
+            for sentence in iter_sentences(_single_token_stream(result)):
+                clean = self._sanitize_response(sentence)
+                if clean:
+                    full_text += clean + " "
+                    yield clean
+        except Exception as e:
+            logger.debug(f"stream_think: sentence splitting failed: {e}")
+            # Fall back to yielding the full result
+            yield result
+
     # ------------------------------------------------------------------
     # Mode-based routing: classify → route to quick/agent/research
     # ------------------------------------------------------------------
@@ -3094,6 +3250,20 @@ class Brain:
 
         # Fallback: return raw report summary
         return report[:500]
+
+    def _record_trace_tool(self, name: str, args, result) -> None:
+        """Append a tool call + result to the current trace."""
+        if self.last_call_trace is None:
+            return
+        self.last_call_trace.setdefault("tool_calls", []).append({
+            "tool": name,
+            "args": args,
+            "name": name,
+        })
+        self.last_call_trace.setdefault("tool_results", []).append({
+            "tool": name,
+            "result": str(result)[:500] if result else None,
+        })
 
     def _write_trace(self):
         """Write last_call_trace to brain_trace.json for external consumers."""
@@ -3349,13 +3519,32 @@ class Brain:
 
             i += 1
 
+        # Determine if thinking is supported for this model
+        _model = self.anthropic_model
+        _thinking_ok = "haiku" not in _model.lower() and any(
+            x in _model.lower() for x in ("claude-opus-4", "claude-sonnet-4", "claude-3-7")
+        )
+        max_tokens = 8000 if _thinking_ok else 4096
+
         payload = {
-            "model": "claude-sonnet-4-20250514",
-            "max_tokens": 1024,
-            "temperature": 0.7,
-            "system": self.system_prompt,
+            "model": _model,
+            "max_tokens": max_tokens,
+            # System prompt as cached array — saves tokens on repeated calls
+            "system": [
+                {
+                    "type": "text",
+                    "text": self.system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             "messages": anthropic_messages,
         }
+
+        # Extended thinking — requires temperature=1 (Anthropic default when omitted)
+        if _thinking_ok:
+            payload["thinking"] = {"type": "enabled", "budget_tokens": 2000}
+        else:
+            payload["temperature"] = 0.7
 
         if with_tools:
             anthropic_tools = []
@@ -3372,11 +3561,12 @@ class Brain:
             "https://api.anthropic.com/v1/messages",
             headers={
                 "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
+                "anthropic-version": "2024-06-01",
                 "Content-Type": "application/json",
+                "anthropic-beta": "prompt-caching-2024-07-16",
             },
             json=payload,
-            timeout=15,
+            timeout=120,
         )
         response.raise_for_status()
         data = response.json()
@@ -3388,7 +3578,10 @@ class Brain:
 
         for block in content_blocks:
             block_type = block.get("type", "")
-            if block_type == "text":
+            if block_type == "thinking":
+                # Log reasoning but keep it out of spoken output
+                logger.debug(f"[Claude thinking] {block.get('thinking', '')[:400]}")
+            elif block_type == "text":
                 text_parts.append(block.get("text", ""))
             elif block_type == "tool_use":
                 tool_calls.append({
@@ -3554,19 +3747,31 @@ class Brain:
                     "https://api.anthropic.com/v1/messages",
                     headers={
                         "x-api-key": self.api_key,
-                        "anthropic-version": "2023-06-01",
+                        "anthropic-version": "2024-06-01",
                         "Content-Type": "application/json",
+                        "anthropic-beta": "prompt-caching-2024-07-16",
                     },
                     json={
-                        "model": "claude-sonnet-4-20250514",
-                        "max_tokens": 100,
-                        "system": _identity,
+                        "model": self.anthropic_model,
+                        "max_tokens": 200,
+                        "system": [
+                            {
+                                "type": "text",
+                                "text": _identity,
+                                "cache_control": {"type": "ephemeral"},
+                            }
+                        ],
                         "messages": [{"role": "user", "content": prompt}],
                     },
-                    timeout=10,
+                    timeout=30,
                 )
                 resp.raise_for_status()
-                content = resp.json()["content"][0]["text"]
+                data = resp.json()
+                text_parts = [
+                    b.get("text", "") for b in data.get("content", [])
+                    if b.get("type") == "text"
+                ]
+                content = " ".join(text_parts)
                 return self._sanitize_response(content)
         except Exception as e:
             logger.debug(f"quick_chat failed: {e}")
@@ -3578,14 +3783,83 @@ class Brain:
                 except Exception:
                     pass
 
+    def route_chat(self, prompt: str, task: str = "chat",
+                   system_prompt: str = "") -> "str | None":
+        """Route a chat request through the multi-model router.
+
+        Uses the optimal model for the given task type (fast/balanced/powerful/vision).
+        Falls back to quick_chat() if the router has no model for the task.
+        """
+        try:
+            from llm.model_router import model_router
+            result = model_router.chat(
+                prompt, task=task,
+                system_prompt=system_prompt or (
+                    f"You are {self.ainame}, a personal AI assistant. "
+                    f"Be concise and helpful."
+                ),
+            )
+            if result:
+                return self._sanitize_response(result)
+        except Exception as e:
+            logger.debug("route_chat failed: %s", e)
+        return self.quick_chat(prompt)
+
+    def route_stream(self, prompt: str, task: str = "chat",
+                     system_prompt: str = ""):
+        """Stream a response through the multi-model router, yielding sentence tokens."""
+        try:
+            from llm.model_router import model_router
+            yield from model_router.stream(
+                prompt, task=task,
+                system_prompt=system_prompt or (
+                    f"You are {self.ainame}, a personal AI assistant. "
+                    f"Be concise and helpful."
+                ),
+            )
+            return
+        except Exception as e:
+            logger.debug("route_stream failed: %s", e)
+        # Fallback: quick_chat as single token
+        result = self.quick_chat(prompt)
+        if result:
+            yield result
+
+    # ── Advanced Memory API ───────────────────────────────────────────────────
+
+    def get_memory_context(self, query: str) -> dict:
+        """Return multi-layer memory context relevant to a query.
+
+        Aggregates working memory window, similar past episodes, and
+        related knowledge graph entities for use in prompt enrichment.
+        """
+        try:
+            from memory.memory_api import memory as _mem
+            return _mem.context_for_query(query)
+        except Exception as e:
+            logger.debug("get_memory_context failed: %s", e)
+            return {"working": [], "topic": "", "similar_episodes": [],
+                    "related_entities": [], "semantic_hits": []}
+
+    def recall_similar(self, query: str, top_k: int = 3) -> list:
+        """Return top-k semantically similar past utterances."""
+        try:
+            from memory.memory_api import memory as _mem
+            return _mem.recall_text(query, top_k=top_k)
+        except Exception:
+            return []
+
     def stream_response(self, prompt, speak_fn=None):
         """
         Stream LLM response and speak each sentence as it completes.
         Much faster perceived latency — first words spoken in ~1-2s.
         Returns the full response text.
         """
-        if self.provider_name != "ollama":
-            # Non-streaming fallback for non-Ollama providers
+        if self.provider_name == "anthropic":
+            return self._stream_anthropic(prompt, speak_fn)
+
+        if self.provider_name not in ("ollama",):
+            # Non-streaming fallback for OpenAI/OpenRouter
             result = self.quick_chat(prompt)
             if result and speak_fn:
                 speak_fn(result)
@@ -3652,6 +3926,237 @@ class Brain:
             if result and speak_fn:
                 speak_fn(result)
             return result
+
+    def _stream_anthropic(self, prompt, speak_fn=None):
+        """Stream response from Anthropic API with sentence-level TTS delivery."""
+        import threading
+        import re as _re
+        _sentence_end = _re.compile(r'[.!?]\s')
+        try:
+            resp = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2024-06-01",
+                    "Content-Type": "application/json",
+                    "anthropic-beta": "prompt-caching-2024-07-16",
+                },
+                json={
+                    "model": self.anthropic_model,
+                    "max_tokens": 1024,
+                    "stream": True,
+                    "system": [
+                        {
+                            "type": "text",
+                            "text": self.system_prompt,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                stream=True,
+                timeout=60,
+            )
+            resp.raise_for_status()
+
+            buffer = ""
+            full_response = ""
+            for raw_line in resp.iter_lines(decode_unicode=True):
+                if not raw_line or not raw_line.startswith("data: "):
+                    continue
+                try:
+                    event = json.loads(raw_line[6:])
+                except json.JSONDecodeError:
+                    continue
+                event_type = event.get("type", "")
+                if event_type == "content_block_delta":
+                    delta = event.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        token = delta.get("text", "")
+                        buffer += token
+                        full_response += token
+                        match = _sentence_end.search(buffer)
+                        if match:
+                            sentence = buffer[:match.end()].strip()
+                            buffer = buffer[match.end():]
+                            if speak_fn and sentence:
+                                threading.Thread(
+                                    target=speak_fn, args=(sentence,), daemon=True
+                                ).start()
+                elif event_type == "message_stop":
+                    break
+
+            if buffer.strip() and speak_fn:
+                speak_fn(buffer.strip())
+
+            return self._sanitize_response(full_response) if full_response else None
+
+        except Exception as e:
+            logger.debug(f"_stream_anthropic failed: {e}")
+            result = self.quick_chat(prompt)
+            if result and speak_fn:
+                speak_fn(result)
+            return result
+
+    def stream_quick_chat(self, prompt: str):
+        """Stream quick_chat response as a sentence generator.
+
+        Yields complete speakable sentences as the LLM generates tokens.
+        First sentence arrives in ~0.5-2s (vs 5-90s for full response).
+        Caller passes this directly to speech.speak_stream():
+
+            from speech import speak_stream
+            speak_stream(brain.stream_quick_chat("How are you?"))
+
+        Falls back to yielding the full quick_chat result as one chunk
+        if streaming is unavailable or the provider doesn't support it.
+
+        Yields:
+            str: Speakable sentences in order.
+        """
+        try:
+            from llm.sentence_buffer import iter_sentences
+        except ImportError:
+            # sentence_buffer not available — fall back to non-streaming
+            result = self.quick_chat(prompt)
+            if result:
+                yield result
+            return
+
+        _identity = (
+            f"You are {self.ainame}, a personal AI created by Dawa Sangay Sherpa. "
+            f"If asked about your creator/maker, ALWAYS say 'Dawa Sangay Sherpa created me'. "
+            f"Never say Alibaba, Qwen, OpenAI, Anthropic, Meta, or any company. "
+            f"Be concise and natural. Respond conversationally."
+        )
+        # Inject AwarenessState context for grounded responses
+        try:
+            from core.context_injector import build_context as _build_awareness_ctx
+            _awareness_ctx = _build_awareness_ctx(prompt)
+            if _awareness_ctx:
+                _identity = _identity + f"\n\n{_awareness_ctx}"
+        except Exception:
+            pass
+        _messages = [
+            {"role": "system", "content": _identity},
+            {"role": "user", "content": prompt},
+        ]
+
+        # Try native provider streaming
+        token_stream = None
+        if self.provider_name == "ollama":
+            try:
+                from ai_providers import OllamaProvider
+                _prov = OllamaProvider(
+                    self.api_key, _identity,
+                    model=self.ollama_model, ollama_url=self.ollama_url
+                )
+                token_stream = _prov.stream_response(_messages)
+            except Exception as e:
+                logger.debug(f"stream_quick_chat: Ollama stream init failed: {e}")
+        elif self.provider_name == "openai":
+            try:
+                from ai_providers import OpenAIProvider
+                _prov = OpenAIProvider(self.api_key, _identity)
+                token_stream = _prov.stream_response(_messages)
+            except Exception as e:
+                logger.debug(f"stream_quick_chat: OpenAI stream init failed: {e}")
+        elif self.provider_name == "anthropic":
+            try:
+                from ai_providers import AnthropicProvider
+                _prov = AnthropicProvider(self.api_key, _identity)
+                token_stream = _prov.stream_response(_messages)
+            except Exception as e:
+                logger.debug(f"stream_quick_chat: Anthropic stream init failed: {e}")
+
+        if token_stream is not None:
+            full_text = ""
+            try:
+                for sentence in iter_sentences(token_stream):
+                    clean = self._sanitize_response(sentence)
+                    if clean:
+                        full_text += clean + " "
+                        yield clean
+                return
+            except Exception as e:
+                logger.debug(f"stream_quick_chat: sentence streaming failed: {e}")
+                if full_text:
+                    return  # Already yielded partial — don't double-yield
+
+        # Fallback: non-streaming
+        result = self.quick_chat(prompt)
+        if result:
+            yield result
+
+    def thinking_chat(self, prompt: str) -> str:
+        """LLM call with extended thinking / chain-of-thought reasoning.
+
+        Used by swarm agents (Planner, Critic) for complex reasoning tasks.
+        - Anthropic: native extended thinking API (claude-sonnet-4 / claude-opus-4)
+        - Ollama / OpenAI / OpenRouter: CoT prompt injection
+        """
+        if self.provider_name == "anthropic":
+            _model = self.anthropic_model
+            _thinking_ok = "haiku" not in _model.lower() and any(
+                x in _model.lower()
+                for x in ("claude-opus-4", "claude-sonnet-4", "claude-3-7")
+            )
+            if _thinking_ok:
+                return self._anthropic_thinking_call(prompt)
+            # Haiku or unknown model — fall through to CoT
+            return self.quick_chat(f"Think step by step:\n{prompt}")
+
+        # For Ollama / OpenAI / OpenRouter — inject chain-of-thought instruction
+        cot_prompt = (
+            f"Before answering, reason through this carefully step by step.\n\n"
+            f"{prompt}\n\n"
+            f"Think through the problem, then give your final answer."
+        )
+        return self.quick_chat(cot_prompt)
+
+    def _anthropic_thinking_call(self, prompt: str) -> str:
+        """Extended thinking call via Anthropic API (budget_tokens=5000)."""
+        _identity = (
+            f"You are {self.ainame}, a personal AI created by Dawa Sangay Sherpa. "
+            f"If asked about your creator/maker, ALWAYS say 'Dawa Sangay Sherpa created me'. "
+            f"Be helpful, thorough, and reason carefully before answering."
+        )
+        try:
+            resp = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2024-06-01",
+                    "Content-Type": "application/json",
+                    "anthropic-beta": "prompt-caching-2024-07-16",
+                },
+                json={
+                    "model": self.anthropic_model,
+                    "max_tokens": 10000,
+                    "thinking": {"type": "enabled", "budget_tokens": 5000},
+                    "system": [
+                        {
+                            "type": "text",
+                            "text": _identity,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=120,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            text_parts = []
+            for block in data.get("content", []):
+                if block.get("type") == "thinking":
+                    logger.debug(f"[Agent thinking] {block.get('thinking', '')[:500]}")
+                elif block.get("type") == "text":
+                    text_parts.append(block.get("text", ""))
+            return self._sanitize_response(" ".join(text_parts)) or ""
+        except Exception as e:
+            logger.warning(f"_anthropic_thinking_call failed: {e}")
+            return self.quick_chat(prompt) or ""
 
     # ------------------------------------------------------------------
     # Session persistence — export/import for continuity across restarts

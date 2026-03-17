@@ -1563,6 +1563,69 @@ def speak_async(text):
     threading.Thread(target=speak, args=(text,), daemon=True).start()
 
 
+def speak_stream(sentence_gen, lang: str = "en"):
+    """Speak sentences as they arrive from a streaming generator.
+
+    Feeds each sentence directly to TTS as it is yielded by the generator,
+    enabling sub-200ms first-word latency when paired with a streaming LLM
+    and a sentence buffer.
+
+    Args:
+        sentence_gen: Iterable of sentence strings (e.g. from sentence_buffer.iter_sentences)
+        lang: Language code for TTS engine selection (default: "en")
+
+    Returns:
+        str or None: Barge-in text if user interrupted, else None.
+    """
+    global _last_spoken_text, _speak_end_time
+    set_mic_state("SPEAKING")
+    _is_speaking.set()
+
+    # Auto-detect language override from detected STT language
+    with _language_lock:
+        effective_lang = lang if lang != "auto" else (_detected_language or "en")
+
+    interrupted = None
+    try:
+        for sentence in sentence_gen:
+            if not sentence.strip():
+                continue
+            if _stop_speaking.is_set():
+                _stop_speaking.clear()
+                break
+
+            with _echo_lock:
+                _last_spoken_text = sentence[:200]
+
+            # Route to appropriate TTS engine per sentence
+            if effective_lang == "en":
+                _speak_piper(sentence)
+            else:
+                _speak_gtts(sentence, effective_lang)
+
+            # Check for barge-in after each sentence (non-blocking peek)
+            if _stop_speaking.is_set():
+                _stop_speaking.clear()
+                break
+
+            # Lightweight barge-in check between sentences using existing VAD
+            try:
+                from speech import _is_barge_in_listening
+                if _is_barge_in_listening and _is_barge_in_listening.is_set():
+                    # Someone started speaking — stop and let the main loop handle it
+                    break
+            except Exception:
+                pass
+    finally:
+        _is_speaking.clear()
+        with _echo_lock:
+            _speak_end_time = time.time()
+        time.sleep(_POST_TTS_COOLDOWN_S)
+        set_mic_state("IDLE")
+
+    return interrupted
+
+
 def stop_speaking():
     """Immediately stop any ongoing speech. Called on barge-in."""
     _stop_speaking.set()

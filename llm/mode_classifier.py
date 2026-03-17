@@ -173,7 +173,15 @@ def classify_mode(user_input, quick_chat_fn=None):
         return _finish(ModeDecision("quick", 0.95, "quick pattern match"))
 
     # ---- RESEARCH MODE: questions needing multi-source web research ----
-    _tool_answerable = r"\b(weather|forecast|temperature|time|date|reminder|app|file|disk|ram|cpu|battery|software|install)\b"
+    # Only exclude as "tool-answerable" when the query has an action verb + hardware keyword
+    # (e.g. "check my cpu", "what's my ram"). Pure knowledge questions that happen to
+    # mention cpu/disk (e.g. "compare the M3 chip vs Intel i9") should still reach
+    # research detection.
+    _tool_answerable = (
+        r"\b(?:check|show|get|what(?:'s| is) (?:my|the)|how much|monitor|measure)\s+"
+        r"(?:my\s+)?(?:weather|forecast|temperature|time|date|reminder|disk|ram|cpu|battery|"
+        r"storage|memory|ip|network|wifi|bluetooth)\b"
+    )
     if re.search(_tool_answerable, lower):
         pass
     else:
@@ -223,10 +231,11 @@ def classify_mode(user_input, quick_chat_fn=None):
 
     # ---- LLM CLASSIFICATION: ambiguous cases ----
     # For commands that don't match any pattern, ask the LLM to classify
+    # Prefer model_router.classify (fast tier) over quick_chat for speed
     words = lower.split()
     if len(words) >= 4 and quick_chat_fn:
         try:
-            llm_answer = quick_chat_fn(
+            _cls_prompt = (
                 f"Classify this command into exactly ONE category:\n"
                 f"- QUICK: simple single-step task (open app, check weather, play music, set reminder)\n"
                 f"- AGENT: needs multiple UI steps (search+click, navigate+fill, open+interact)\n"
@@ -235,6 +244,13 @@ def classify_mode(user_input, quick_chat_fn=None):
                 f"Command: \"{user_input}\"\n"
                 f"Reply with ONLY the category name (QUICK/AGENT/RESEARCH/CHAT)."
             )
+            try:
+                from llm.model_router import model_router as _mr
+                llm_answer = _mr.classify(user_input,
+                                          categories=["QUICK", "AGENT", "RESEARCH", "CHAT"],
+                                          system_prompt="Classify the user command.")
+            except Exception:
+                llm_answer = quick_chat_fn(_cls_prompt)
             if llm_answer:
                 _cls = llm_answer.strip().upper()[:10]
                 if "AGENT" in _cls:

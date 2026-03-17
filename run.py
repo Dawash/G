@@ -478,7 +478,7 @@ def _validate_cloud_api_key(provider, api_key, config, config_file):
             }).encode()
             req = urllib.request.Request(url, data=body, method="POST")
             req.add_header("x-api-key", api_key)
-            req.add_header("anthropic-version", "2023-06-01")
+            req.add_header("anthropic-version", "2024-06-01")
             req.add_header("Content-Type", "application/json")
         else:
             body = json.dumps({

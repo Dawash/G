@@ -205,6 +205,7 @@ class SkillLibrary:
                 "ALTER TABLE skills ADD COLUMN parameters_template TEXT DEFAULT '{}'",
                 "ALTER TABLE skills ADD COLUMN depends_on TEXT DEFAULT '[]'",
                 "ALTER TABLE skills ADD COLUMN cooldown_seconds INTEGER DEFAULT 0",
+                "ALTER TABLE skills ADD COLUMN quality_score INTEGER DEFAULT 0",
             ]
             for sql in _migrations:
                 try:
@@ -441,7 +442,7 @@ class SkillLibrary:
                    tags=None, parent_skills=None, duration=0.0,
                    activation_triggers=None, required_credentials=None,
                    category=None, expected_outputs=None, cooldown_seconds=0,
-                   depends_on=None):
+                   depends_on=None, quality_score=0):
         """Store a successful tool sequence as a reusable skill.
 
         Args:
@@ -500,9 +501,9 @@ class SkillLibrary:
                     (name, description, goal, tool_sequence, tags, tokens,
                      success_count, avg_duration, parent_skills, created_at, updated_at,
                      activation_triggers, required_credentials, category,
-                     expected_outputs, version, cooldown_seconds, depends_on)
+                     expected_outputs, version, cooldown_seconds, depends_on, quality_score)
                     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?,
-                            ?, ?, ?, ?, 1, ?, ?)
+                            ?, ?, ?, ?, 1, ?, ?, ?)
                     ON CONFLICT(name) DO UPDATE SET
                         description = excluded.description,
                         tool_sequence = excluded.tool_sequence,
@@ -517,7 +518,8 @@ class SkillLibrary:
                         category = excluded.category,
                         expected_outputs = excluded.expected_outputs,
                         cooldown_seconds = excluded.cooldown_seconds,
-                        depends_on = excluded.depends_on
+                        depends_on = excluded.depends_on,
+                        quality_score = MAX(excluded.quality_score, quality_score)
                 """, (
                     name, description, goal,
                     json.dumps(tool_sequence),
@@ -532,6 +534,7 @@ class SkillLibrary:
                     json.dumps(expected_outputs or []),
                     cooldown_seconds or 0,
                     json.dumps(depends_on or []),
+                    quality_score or 0,
                 ))
                 self._conn.commit()
                 # Index in vector store for semantic search
@@ -723,7 +726,9 @@ class SkillLibrary:
                     if trigger.lower() in text_lower:
                         score += 1
 
-            if score == 0:
+            # Require ALL triggers to match (AND semantics) — prevents common
+            # words like "open" from matching unrelated skills
+            if score < len(triggers):
                 continue
 
             # Check cooldown
@@ -866,14 +871,16 @@ class SkillLibrary:
                         success_count = success_count + 1,
                         avg_duration = (avg_duration * success_count + ?) / (success_count + 1),
                         last_used_at = ?,
-                        updated_at = ?
+                        updated_at = ?,
+                        quality_score = MIN(100, quality_score + 2)
                     WHERE name = ?
                 """, (duration, time.time(), time.time(), name))
             else:
                 c.execute("""
                     UPDATE skills SET
                         fail_count = fail_count + 1,
-                        updated_at = ?
+                        updated_at = ?,
+                        quality_score = MAX(0, quality_score - 5)
                     WHERE name = ?
                 """, (time.time(), name))
             self._conn.commit()
@@ -949,7 +956,7 @@ class SkillLibrary:
             c = self._conn.cursor()
             c.execute("""
                 SELECT name, description, success_count, fail_count, tags,
-                       created_at, updated_at
+                       quality_score, category, created_at, updated_at
                 FROM skills
                 ORDER BY success_count DESC, updated_at DESC
                 LIMIT ?
@@ -1046,3 +1053,470 @@ class SkillLibrary:
                     self._vectors.remove(name)
                 except Exception as ve:
                     logger.debug(f"VectorStore remove failed for '{name}': {ve}")
+
+
+# ===========================================================================
+# Skill Curriculum — built-in complex tasks organized by difficulty
+# ===========================================================================
+
+SKILL_CURRICULUM = {
+    "basic": [
+        "Open Chrome and search for the weather",
+        "Open Notepad and type a hello world message",
+        "Take a screenshot and save it to the desktop",
+        "Set a reminder for 5 minutes from now",
+        "Get the current time and today's weather",
+        "Search Google for the latest news",
+        "Open the calculator app",
+        "Minimize all windows",
+    ],
+    "intermediate": [
+        "Search for Python tutorials on YouTube and play the first result",
+        "Open Gmail in Chrome and compose a new email draft",
+        "Find the top news headlines and read them aloud",
+        "Open Spotify and play jazz music",
+        "Check the weather forecast for the next 3 days",
+        "Search for a restaurant near me on Google Maps",
+        "Open a text file, read it, and summarize its contents",
+        "Set a recurring reminder every weekday at 9am",
+        "Take a screenshot and describe what is on screen",
+        "Open Chrome, go to GitHub, search for Python projects",
+    ],
+    "advanced": [
+        "Research the latest AI news, summarize the top 3 stories, and save to a text file",
+        "Play lofi music on YouTube, then set a 25-minute Pomodoro reminder",
+        "Open Chrome, navigate to Reddit, find the top post in r/programming and summarize it",
+        "Search for flights from Kathmandu to Delhi next month and read out the cheapest option",
+        "Open a terminal, check CPU and RAM usage, and give me a health summary",
+        "Research a Python programming concept, then create a code example file",
+        "Find the top 3 trending videos on YouTube and read their titles",
+        "Open the system settings and check the display configuration",
+        "Search for a recipe, extract the ingredients, and create a shopping list file",
+        "Read the top 5 tech news headlines and create a daily briefing text file",
+    ],
+}
+
+# Tools available for skill workflow design
+_SKILL_TOOLS = [
+    "open_app", "close_app", "minimize_app",
+    "google_search", "web_read", "web_search_answer",
+    "browser_action", "agent_task",
+    "get_weather", "get_forecast", "get_time", "get_news",
+    "set_reminder", "list_reminders",
+    "take_screenshot", "find_on_screen",
+    "click_at", "type_text", "press_key", "scroll",
+    "run_terminal", "manage_files", "create_file",
+    "search_in_app", "play_music", "send_email",
+    "ask_user_choice", "ask_user_input", "system_command",
+]
+
+
+# ===========================================================================
+# SkillTrainer — Active dual-LLM learning system
+# ===========================================================================
+
+class SkillTrainer:
+    """Active skill trainer using dual-LLM pipeline.
+
+    Ollama (local):     Fast task decomposition, tool assignment, pattern recognition.
+    Anthropic (thinking): Deep analysis, quality scoring, workflow optimization,
+                          skill improvement from execution history.
+
+    Workflow:
+        train()          → generate skills for new tasks from curriculum
+        train_one()      → generate + save one skill (decompose→assign→analyze→save)
+        improve_skills() → improve all skills below quality threshold
+        improve_one()    → deep-analyze one skill with thinking LLM
+        suggest_workflow() → design algorithm + step chain + error strategies
+
+    Self-improvement loop:
+        Every skill tracks quality_score, success_count, fail_count, reflexions.
+        improve_skills() runs thinking-LLM analysis on low-quality skills,
+        compares new sequence with old, bumps version if score improves by 5+.
+    """
+
+    def __init__(self, llm_fn, thinking_fn=None, skill_lib=None):
+        """
+        Args:
+            llm_fn:      Callable(prompt) → str. Fast LLM (Ollama quick_chat).
+            thinking_fn: Callable(prompt) → str. Deep-reasoning LLM (Anthropic
+                         thinking_chat or falls back to llm_fn).
+            skill_lib:   SkillLibrary instance. Created fresh if None.
+        """
+        self._llm = llm_fn
+        self._think = thinking_fn or llm_fn
+        self._lib = skill_lib or SkillLibrary()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def train(self, tasks=None, difficulty="intermediate"):
+        """Run a full training session.
+
+        Args:
+            tasks:      List of task strings. If None, uses built-in curriculum.
+            difficulty: "basic" | "intermediate" | "advanced" (for curriculum).
+
+        Returns dict: total, succeeded, failed, avg_quality, skills_saved, results.
+        """
+        if tasks is None:
+            tasks = SKILL_CURRICULUM.get(difficulty, SKILL_CURRICULUM["intermediate"])
+        logger.info(f"[SkillTrainer] Training {len(tasks)} tasks ({difficulty})")
+        results = []
+        for i, task in enumerate(tasks):
+            logger.info(f"[SkillTrainer] [{i+1}/{len(tasks)}] {task[:70]}")
+            try:
+                r = self.train_one(task)
+                results.append(r)
+                time.sleep(0.3)          # breathe between LLM calls
+            except Exception as e:
+                logger.warning(f"[SkillTrainer] task failed: {e}")
+                results.append({
+                    "task": task, "skill_name": "", "success": False,
+                    "quality_score": 0, "steps": 0, "improvements": [],
+                    "error": str(e),
+                })
+        succeeded = sum(1 for r in results if r.get("success"))
+        avg_q = sum(r.get("quality_score", 0) for r in results) / max(len(results), 1)
+        return {
+            "total": len(results), "succeeded": succeeded,
+            "failed": len(results) - succeeded,
+            "avg_quality": round(avg_q, 1),
+            "skills_saved": sum(1 for r in results if r.get("skill_name")),
+            "results": results,
+        }
+
+    def train_one(self, task):
+        """Generate and save a skill for one task using dual-LLM.
+
+        Step 1 [fast LLM]: decompose task into ordered atomic steps.
+        Step 2 [fast LLM]: assign the best tool to each step.
+        Step 3 [thinking LLM]: analyze sequence quality, suggest improvements.
+        Step 4: validate tool names, deduplicate, save to library.
+
+        Returns dict with task, skill_name, success, quality_score, steps, improvements.
+        """
+        t0 = time.perf_counter()
+
+        # 1. Decompose
+        steps = self._decompose(task)
+        if not steps:
+            return {"task": task, "skill_name": "", "success": False,
+                    "quality_score": 0, "steps": 0, "improvements": [],
+                    "error": "decompose returned empty"}
+
+        # 2. Assign tools
+        sequence = self._assign_tools(task, steps)
+
+        # 3. Deep analysis + improvement
+        analysis = self._analyze(task, sequence)
+        final_seq = self._validate_tools(
+            analysis.get("improved_sequence") or sequence
+        )
+        quality = max(0, min(100, int(analysis.get("quality_score", 50))))
+        improvements = analysis.get("improvements", [])
+
+        # 4. Save / refine
+        skill_name = ""
+        try:
+            # Check if similar skill already exists
+            existing = self._lib.find_skill(task, min_similarity=0.85, limit=1)
+            if existing:
+                old = existing[0]
+                if quality > (old.get("success_count", 0) * 10):  # rough quality proxy
+                    note = f"Auto-improved: {'; '.join(improvements[:2])}" if improvements else "Auto-retrain"
+                    self._lib.refine_skill(old["name"], final_seq, note)
+                    skill_name = old["name"]
+                else:
+                    skill_name = old["name"]
+            else:
+                skill_name = self._lib.generate_skill_name(task, llm_fn=self._llm)
+                self._lib.save_skill(
+                    name=skill_name,
+                    description=task,
+                    goal=task,
+                    tool_sequence=final_seq,
+                    tags=["trained", "auto"],
+                )
+        except Exception as e:
+            logger.warning(f"[SkillTrainer] save failed: {e}")
+
+        duration = round(time.perf_counter() - t0, 1)
+        logger.info(f"[SkillTrainer] '{task[:50]}' → '{skill_name}' quality={quality} ({duration}s)")
+        return {
+            "task": task, "skill_name": skill_name,
+            "success": bool(skill_name and final_seq),
+            "quality_score": quality, "steps": len(final_seq),
+            "improvements": improvements,
+        }
+
+    def improve_skills(self, min_quality=60):
+        """Improve all skills below quality threshold using deep analysis.
+
+        Loads each skill's execution history and reflexions, sends to thinking
+        LLM, updates if the new sequence is measurably better.
+
+        Returns dict: analyzed, improved, unchanged, reports.
+        """
+        all_skills = self._lib.list_skills(limit=100)
+        # Candidates: skills with failures OR no quality tracking
+        candidates = [
+            s for s in all_skills
+            if s.get("fail_count", 0) > 0 or s.get("success_count", 0) < 3
+        ]
+        logger.info(f"[SkillTrainer] Improving {len(candidates)} skill candidates")
+        reports = []
+        for skill in candidates[:25]:       # cap at 25 to avoid runaway cost
+            try:
+                r = self.improve_one(skill["name"])
+                if r:
+                    reports.append(r)
+                time.sleep(0.2)
+            except Exception as e:
+                logger.warning(f"[SkillTrainer] improve failed for {skill['name']}: {e}")
+        improved = sum(1 for r in reports if r.get("version_bumped"))
+        return {
+            "analyzed": len(candidates), "improved": improved,
+            "unchanged": len(reports) - improved, "reports": reports,
+        }
+
+    def improve_one(self, skill_name):
+        """Deep-analyze one skill with thinking LLM and update if better.
+
+        Uses execution history (success_count, fail_count) and stored reflexions
+        to give the thinking LLM full context for improvement.
+
+        Returns dict: skill_name, old_score, new_score, issues, improvements, version_bumped.
+        """
+        matches = self._lib.find_skill(skill_name, min_similarity=0.9, limit=1)
+        if not matches:
+            return None
+        skill = matches[0]
+
+        seq = skill.get("tool_sequence", [])
+        reflexions = self._lib.get_reflections(skill_name, limit=5)
+        ref_text = "; ".join(r["reflection"] for r in reflexions) if reflexions else "none"
+        s = skill.get("success_count", 0)
+        f = skill.get("fail_count", 0)
+        rate = f"{s}/{s+f} successes" if (s + f) > 0 else "never executed"
+
+        prompt = (
+            f"You are a desktop automation skill optimizer.\n\n"
+            f"Skill: \"{skill_name}\"\n"
+            f"Goal: \"{skill.get('description', skill_name)}\"\n"
+            f"Execution history: {rate}\n"
+            f"Past failure lessons: {ref_text}\n\n"
+            f"Current tool sequence:\n{json.dumps(seq, indent=2)}\n\n"
+            f"Available tools: {', '.join(_SKILL_TOOLS)}\n\n"
+            f"Analyze:\n"
+            f"1. Score the CURRENT sequence quality 0-100\n"
+            f"2. What are the 1-3 main issues?\n"
+            f"3. What improved sequence would be more reliable?\n"
+            f"4. Score the IMPROVED sequence 0-100\n\n"
+            f"Return JSON only:\n"
+            f'{{"old_score": 55, "new_score": 80, '
+            f'"issues": ["issue1"], "improvements": ["fix1"], '
+            f'"new_sequence": [{{"step": "...", "tool": "...", "args": {{}}}}]}}'
+        )
+        raw = self._think(prompt) or "{}"
+        data = self._parse_json_obj(raw, {})
+
+        old_score = int(data.get("old_score", 50))
+        new_score = int(data.get("new_score", old_score))
+        new_seq = self._validate_tools(data.get("new_sequence", seq))
+        issues = data.get("issues", [])
+        improvements = data.get("improvements", [])
+        version_bumped = (new_score > old_score + 5) and (new_seq != seq)
+
+        if version_bumped:
+            note = f"Score {old_score}→{new_score}: {'; '.join(improvements[:2])}"
+            self._lib.refine_skill(skill_name, new_seq, note)
+            logger.info(f"[SkillTrainer] '{skill_name}' improved {old_score}→{new_score}")
+
+        return {
+            "skill_name": skill_name, "old_score": old_score, "new_score": new_score,
+            "issues": issues, "improvements": improvements, "version_bumped": version_bumped,
+        }
+
+    def suggest_workflow(self, task):
+        """Design an optimal workflow for any task.
+
+        Returns a structured dict with:
+          algorithm    — linear | parallel | conditional | retry_loop
+          atomic_steps — [{index, description, tool, args, success_condition, fallback}]
+          error_strategies — ["If X fails, do Y", ...]
+          confidence   — 0-100
+          rationale    — explanation of design choices
+          suggested_tools — ordered list of tool names
+        """
+        tools_str = ", ".join(_SKILL_TOOLS)
+        prompt = (
+            f"Design an optimal workflow for this desktop automation task.\n\n"
+            f"Task: \"{task}\"\n"
+            f"Available tools: {tools_str}\n\n"
+            f"Design the following:\n"
+            f"1. Algorithm type: linear | parallel | conditional | retry_loop\n"
+            f"2. Break into atomic micro-steps (one action each, max 10 steps)\n"
+            f"3. For each step: tool to use, args, what success looks like, fallback if it fails\n"
+            f"4. Three things that could go wrong and recovery strategy for each\n"
+            f"5. Confidence score 0-100 (how automatable is this task?)\n"
+            f"6. Brief rationale for your design choices\n\n"
+            f"Return JSON only:\n"
+            f'{{"algorithm": "linear", '
+            f'"atomic_steps": [{{"index": 1, "description": "Open Chrome", "tool": "open_app", '
+            f'"args": {{"name": "chrome"}}, "success_condition": "window appears", "fallback": "try Edge"}}], '
+            f'"error_strategies": ["If browser fails, use run_terminal to launch via CLI"], '
+            f'"confidence": 85, "rationale": "...", '
+            f'"suggested_tools": ["open_app", "browser_action"]}}'
+        )
+        raw = self._think(prompt) or "{}"
+        data = self._parse_json_obj(raw, {})
+
+        steps_raw = data.get("atomic_steps", [])
+        atomic_steps = []
+        for s in steps_raw:
+            if isinstance(s, dict):
+                atomic_steps.append({
+                    "index": s.get("index", len(atomic_steps) + 1),
+                    "description": s.get("description", ""),
+                    "tool": s.get("tool", ""),
+                    "args": s.get("args", {}),
+                    "success_condition": s.get("success_condition", ""),
+                    "fallback": s.get("fallback", "retry"),
+                })
+
+        return {
+            "task": task,
+            "algorithm": data.get("algorithm", "linear"),
+            "atomic_steps": atomic_steps,
+            "error_strategies": data.get("error_strategies", []),
+            "confidence": int(data.get("confidence", 60)),
+            "rationale": data.get("rationale", ""),
+            "suggested_tools": data.get("suggested_tools",
+                                        [s["tool"] for s in atomic_steps if s.get("tool")]),
+            "estimated_steps": len(atomic_steps),
+        }
+
+    # ------------------------------------------------------------------
+    # Internals: decomposition, tool assignment, analysis
+    # ------------------------------------------------------------------
+
+    def _decompose(self, task):
+        """Break task into ordered atomic steps using fast LLM."""
+        prompt = (
+            f"Break this desktop automation task into ordered atomic steps.\n\n"
+            f"Task: \"{task}\"\n\n"
+            f"Rules:\n"
+            f"- Each step = ONE single action (open, click, type, navigate, etc.)\n"
+            f"- Steps in execution order\n"
+            f"- Be specific about UI interactions\n"
+            f"- Max 8 steps\n\n"
+            f'Return JSON array of strings: ["step 1", "step 2", ...]\n'
+            f"JSON only."
+        )
+        raw = self._llm(prompt) or "[]"
+        return self._parse_str_array(raw)
+
+    def _assign_tools(self, task, steps):
+        """Assign best tool to each step using fast LLM."""
+        if not steps:
+            return []
+        tools_str = ", ".join(_SKILL_TOOLS)
+        numbered = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(steps))
+        prompt = (
+            f"Assign the best tool to each automation step.\n\n"
+            f"Task: \"{task}\"\n"
+            f"Available tools: {tools_str}\n\n"
+            f"Steps:\n{numbered}\n\n"
+            f"Return JSON array — one object per step:\n"
+            f'[{{"step": "description", "tool": "tool_name", "args": {{"key": "value"}}}}, ...]\n'
+            f"JSON only."
+        )
+        raw = self._llm(prompt) or "[]"
+        return self._parse_seq_array(raw)
+
+    def _analyze(self, task, sequence):
+        """Analyze sequence quality and return improvements using thinking LLM."""
+        seq_str = json.dumps(sequence, indent=2)
+        prompt = (
+            f"Analyze this tool sequence for correctness and suggest improvements.\n\n"
+            f"Goal: \"{task}\"\n"
+            f"Tool sequence:\n{seq_str}\n\n"
+            f"Available tools: {', '.join(_SKILL_TOOLS)}\n\n"
+            f"Check:\n"
+            f"1. Are all steps necessary? Remove redundant ones.\n"
+            f"2. Is the order correct?\n"
+            f"3. Are tool arguments complete?\n"
+            f"4. Any better tool choices for any step?\n"
+            f"5. Missing error recovery steps?\n\n"
+            f"Return JSON only:\n"
+            f'{{"quality_score": 75, '
+            f'"improved_sequence": [same format as input], '
+            f'"improvements": ["improvement 1", "improvement 2"]}}'
+        )
+        raw = self._think(prompt) or "{}"
+        data = self._parse_json_obj(raw, {})
+        return {
+            "quality_score": int(data.get("quality_score", 50)),
+            "improved_sequence": data.get("improved_sequence", sequence),
+            "improvements": data.get("improvements", []),
+        }
+
+    def _validate_tools(self, sequence):
+        """Remove or fix steps with invalid/unknown tool names."""
+        valid = set(_SKILL_TOOLS)
+        out = []
+        for step in (sequence or []):
+            if not isinstance(step, dict):
+                continue
+            tool = step.get("tool", "")
+            if not tool or tool in valid:
+                out.append(step)
+            else:
+                # fuzzy fix: check if any valid tool is a substring
+                fixed = next((t for t in valid if t in tool or tool in t), None)
+                if fixed:
+                    out.append({**step, "tool": fixed})
+                # else drop the step silently
+        return out
+
+    # ------------------------------------------------------------------
+    # JSON parsing helpers
+    # ------------------------------------------------------------------
+
+    def _parse_str_array(self, raw):
+        """Parse JSON array of strings from LLM output."""
+        try:
+            cleaned = re.sub(r'```(?:json)?\s*', '', raw).strip()
+            m = re.search(r'\[.*\]', cleaned, re.DOTALL)
+            if m:
+                arr = json.loads(m.group())
+                return [str(s) for s in arr if s]
+        except (json.JSONDecodeError, ValueError):
+            pass
+        lines = [l.strip().lstrip('0123456789.-) ') for l in raw.split('\n')]
+        return [l for l in lines if l and len(l) > 5][:10]
+
+    def _parse_seq_array(self, raw):
+        """Parse tool-sequence JSON array from LLM output."""
+        try:
+            cleaned = re.sub(r'```(?:json)?\s*', '', raw).strip()
+            m = re.search(r'\[.*\]', cleaned, re.DOTALL)
+            if m:
+                arr = json.loads(m.group())
+                return [s for s in arr if isinstance(s, dict) and "tool" in s]
+        except (json.JSONDecodeError, ValueError):
+            pass
+        return []
+
+    def _parse_json_obj(self, raw, fallback):
+        """Parse first JSON object from LLM output."""
+        try:
+            cleaned = re.sub(r'```(?:json)?\s*', '', raw or '').strip()
+            m = re.search(r'\{.*\}', cleaned, re.DOTALL)
+            if m:
+                return json.loads(m.group())
+        except (json.JSONDecodeError, ValueError):
+            pass
+        return fallback

@@ -2,7 +2,7 @@
 
 A voice-first AI operating system for Windows that listens, understands, and acts. Built from scratch with 45,000+ lines of Python.
 
-G is your personal AI that controls your entire computer through natural voice commands. It opens apps, browses the web, plays music, manages files, automates desktop tasks, and has full conversations -- all hands-free. Powered by local AI (Ollama, qwen2.5:32b) with no cloud dependency for core features.
+G is your personal AI that controls your entire computer through natural voice commands. It opens apps, browses the web, plays music, manages files, automates desktop tasks, and has full conversations — all hands-free. Powered by local AI (Ollama, qwen2.5:32b) with no cloud dependency for core features.
 
 ## Demo
 
@@ -32,11 +32,11 @@ G: "You're using 24.3 GB out of 47.7 GB (51%)"
 ## Features
 
 ### Voice Control
-- **Wake word detection** - Say "Hey G" to activate (customizable name)
-- **Continuous listening** - Silero VAD + Whisper STT with GPU acceleration
-- **Natural TTS** - Piper (English, neural, offline) + gTTS (Hindi, Nepali, 30+ languages)
-- **Speech barge-in** - Interrupt G mid-sentence with a new command
-- **Multilingual** - Auto-detects and responds in the right language
+- **Wake word detection** — Say "Hey G" to activate (customizable name)
+- **Continuous listening** — Silero VAD + Whisper STT with GPU acceleration
+- **Natural TTS** — Piper (English, neural, offline) + gTTS (Hindi, Nepali, 30+ languages)
+- **Speech barge-in** — Interrupt G mid-sentence with a new command
+- **Multilingual** — Auto-detects and responds in the right language
 
 ### Smart Routing (12-Layer Strategy)
 Every command is intelligently routed through the fastest possible execution path:
@@ -59,20 +59,40 @@ Every command is intelligently routed through the fastest possible execution pat
 Includes context-aware routing, pronoun resolution ("close this" closes the focused app), adaptive reordering (demotes strategies that fail), parallel execution with cancellation, result caching, and postcondition verification.
 
 ### LLM Brain (48+ Tools)
-The AI brain powered by Ollama (local, free) with smart model scaling -- supports 7B to 72B+ models with automatic timeout and context window adjustment:
+Powered by Ollama (local, free) with smart model scaling — supports 7B to 72B+ models with automatic timeout and context window adjustment:
 
-- **App management** - Open, close, minimize, split-screen any application
-- **Web browsing** - Navigate websites, search, read web pages
-- **Music control** - Spotify/YouTube play, pause, skip, volume
-- **File operations** - Create, move, copy, delete, zip files
-- **System info** - RAM, CPU, disk, processes, network stats
-- **Weather & news** - Real-time weather, forecasts, news headlines
-- **Reminders & alarms** - Natural language ("remind me at 5pm")
-- **Email** - Send emails via SMTP
-- **Desktop automation** - Click, type, scroll, keyboard shortcuts
-- **Vision** - Screenshot analysis, element detection
-- **Terminal** - Run any PowerShell/CMD command
-- **Code interpreter** - Safe Python sandbox for math, data processing, logic
+- **App management** — Open, close, minimize, split-screen any application
+- **Web browsing** — Navigate websites, search, read web pages
+- **Music control** — Spotify/YouTube play, pause, skip, volume
+- **File operations** — Create, move, copy, delete, zip files
+- **System info** — RAM, CPU, disk, processes, network stats
+- **Weather & news** — Real-time weather, forecasts, news headlines
+- **Reminders & alarms** — Natural language ("remind me at 5pm")
+- **Email** — Send emails via SMTP
+- **Desktop automation** — Click, type, scroll, keyboard shortcuts
+- **Vision** — Screenshot analysis, element detection
+- **Terminal** — Run any PowerShell/CMD command
+- **Code interpreter** — Safe Python sandbox for math, data processing, logic
+
+### Voyager-Style Skill Library
+- 28 pre-trained skills covering the most common desktop tasks (app launch, media, system, web, files, reminders, research)
+- FAISS vector DB for semantic skill search (TF-IDF fallback if FAISS unavailable)
+- Skills auto-replay when similar requests come in (similarity >= 0.70)
+- **quality_score feedback loop** — Every skill has a score (0-100) that improves on successful use (+2) and drops on failure (-5); skills below 50 are skipped
+- **Arg substitution** — Search/query tools at <0.90 similarity replace stored query args with actual user input (prevents "play jazz" replaying when you said "play rock")
+- **Dual-LLM training pipeline** — Fast decompose with qwen2.5:7b, deep review with qwen2.5:32b
+- Activation triggers for fast regex-based matching before vector search
+- Stale skill pruning (unused skills cleaned after 7 days)
+
+### Smart Proactive Suggestions
+Context-aware suggestions triggered by 4 smart signals — replaces the old every-20-interactions counter:
+
+1. **Post-task follow-up** — After completing a tool action, offers a contextual next step (e.g., after opening browser → "Would you like me to search for something?")
+2. **Repetition detection** — When you run the same type of command 3+ times in a row, suggests automating it as a routine
+3. **Keyword triggers** — Detects stress/context words ("tired", "meeting", "deadline", "error") and offers relevant help
+4. **Failure recovery** — After a failed action, offers to research the problem or try an alternative
+
+All suggestions are rate-limited (30-minute cooldown per topic) to avoid becoming annoying.
 
 ### Multi-Agent Swarm (6 Agents)
 For complex multi-step tasks, G deploys a coordinated team of specialized agents:
@@ -92,29 +112,35 @@ SwarmOrchestrator
 
 **Budget controls:** max 30 actions, 40 LLM calls, 300s timeout, 3 replans.
 
-The debate agent triggers on ambiguous decisions -- spawns three viewpoints (advocate, skeptic, pragmatist) that argue, cross-examine, and a moderator picks the winning approach.
+**CriticAgent** uses self-consistency: two independent assessment views (tool-output view + failure-pattern view) take the more conservative score — never averages, because averaging defeats the safety-first invariant. Completion check uses keyword evidence from tool results as a bonus/penalty signal.
 
-### Voyager-Style Skill Library
-- FAISS vector DB for semantic skill search (with TF-IDF fallback if FAISS unavailable)
-- Successful multi-step action sequences saved as reusable skills
-- Skills auto-replay when similar requests come in (similarity >= 0.70)
-- Stale skill pruning (unused skills cleaned after 7 days)
-- Activation triggers for fast regex-based matching before vector search
+**ExecutorAgent** validates required args before calling any tool — prevents malformed LLM-generated args from silently failing deep in the execution stack.
+
+The debate agent triggers on ambiguous decisions — spawns three viewpoints (advocate, skeptic, pragmatist) that argue, cross-examine, and a moderator picks the winning approach.
 
 ### Reflexion Learning
 - Failure lessons stored in vector memory for future avoidance
 - Oscillation detection (A->B->A->B patterns) forces alternative approaches
-- Diagnosis uses stored reflexions to avoid repeating mistakes
+- Stuck counter uses **decay** instead of hard reset — alternating success/fail still accumulates pressure
+- Rolling failure rate: if 60% of last 8 turns are failures, treats as stuck regardless of oscillation pattern
+- Diagnosis uses stored reflexions to avoid repeating the same mistakes
 
 ### Context-Aware Intelligence
-- **Pronoun resolution** - "Close this" closes the focused app, "go back" navigates browser history
-- **Compound commands** - "Open Chrome and go to Reddit" chains two actions
-- **Failure memory** - Remembers what works and adapts strategy selection
-- **Topic tracking** - Maintains context across multi-turn conversations
-- **Routine detection** - "You usually open Spotify around now"
+- **Pronoun resolution** — "Close this" closes the focused app, "go back" navigates browser history
+- **Compound commands** — "Open Chrome and go to Reddit" chains two actions
+- **Failure memory** — Remembers what works and adapts strategy selection
+- **Topic tracking** — Maintains context across multi-turn conversations (dynamic 6→12 message window)
+- **Routine detection** — "You usually open Spotify around now"
+- **Context collapse before trim** — Completed tool turns are collapsed before the context window is trimmed, keeping the LLM's view clean
 
 ### Tree-of-Thoughts Planning
 The PlannerAgent generates 3 candidate approaches for complex tasks, scores each via LLM evaluation (0-100), selects the best, and decomposes it into executable steps. Falls back to linear planning for simpler goals.
+
+### Mode Classification (JARVIS Engine)
+- Every request is classified as `quick`, `agent`, or `research` before the LLM sees it
+- JARVIS skill engine only activates for `agent` or `research` mode — not triggered by simple 8-word queries
+- Research mode gate is narrowed: requires both an action verb (check/show/get/monitor) AND a hardware/service keyword to avoid routing conversational questions to the web
+- Mode classifier uses `llm/mode_classifier.py` with pattern matching and LLM fallback
 
 ### Browser Automation (Playwright + CDP)
 - **Playwright** for cross-browser automation (Chrome, Firefox, WebKit) with auto-wait, smart selectors, retry logic, and network interception
@@ -124,7 +150,7 @@ The PlannerAgent generates 3 candidate approaches for complex tasks, scores each
 
 ### Code Interpreter
 - Safe Python sandbox with 30-second timeout
-- Restricted imports (math, statistics, json, csv, etc.) -- no network, no filesystem writes
+- Restricted imports (math, statistics, json, csv, etc.) — no network, no filesystem writes
 - 256MB memory limit
 - Handles math calculations, data processing, code generation + execution
 
@@ -146,13 +172,20 @@ The PlannerAgent generates 3 candidate approaches for complex tasks, scores each
 - Nickname system ("my browser" = Firefox)
 - Habit tracking with proactive suggestions
 
+### Execution Safety (core/)
+- **4-tier autonomy** — Tier 0 (time/weather) auto-executes silently. Tier 3 (payments, logins) pauses and asks user.
+- **Tool contracts** — JSON Schema validation on all tool arguments before execution catches hallucinated args from LLM.
+- **Failure journal** — SQLite corpus of all failures, auto-classified by error type, queryable for similar-failure pattern recovery.
+- **32 blocked commands** — Disk destruction, credential theft, firewall disable, recursive deletion, download-and-execute.
+- **Process isolation** — Risky tools (run_terminal, manage_files, click_at, etc.) run in separate subprocess with timeout and crash recovery.
+
 ## Quick Start
 
 ### Prerequisites
 - **Windows 10/11**
 - **Python 3.12** (recommended) or 3.14
 - **Microphone + speakers**
-- **Ollama** (for local AI - free, no API key needed)
+- **Ollama** (for local AI — free, no API key needed)
 
 ### Installation
 
@@ -192,11 +225,11 @@ python main.py
 
 ### First Run Setup
 On first run, G walks you through an interactive wizard:
-1. **Your name** - Used for personalized greetings
-2. **AI name** - What you want to call your AI (default: "G")
-3. **AI provider** - Ollama (local, free), OpenAI, Anthropic, or OpenRouter
-4. **Model selection** - Choose model size based on your RAM (7B/14B/32B/72B)
-5. **API key** - Only needed for cloud providers (encrypted on disk)
+1. **Your name** — Used for personalized greetings
+2. **AI name** — What you want to call your AI (default: "G")
+3. **AI provider** — Ollama (local, free), OpenAI, Anthropic, or OpenRouter
+4. **Model selection** — Choose model size based on your RAM (7B/14B/32B/72B)
+5. **API key** — Only needed for cloud providers (encrypted on disk)
 
 You can type "back" at any step to go back and change your choice.
 
@@ -244,9 +277,9 @@ desktop_agent.py                Autonomous desktop automation
 vision.py                       Screenshot + llava analysis
 computer.py                     Mouse/keyboard control (pyautogui)
 web_agent.py                    Web reading + DuckDuckGo search
-memory.py                       SQLite persistent memory
+memory.py                       SQLite persistent memory + smart proactive
 cognitive.py                    6-phase cognitive engine
-skills.py                       Voyager-style skill library
+skills.py                       Voyager-style skill library (28 pre-trained)
 embeddings.py                   FAISS vector store + sentence-transformers
 email_sender.py                 SMTP email
 reminders.py                    NLP time parsing, recurring
@@ -273,13 +306,21 @@ core/control_flags.py           Runtime control flags
 ```
 agents/orchestrator.py          SwarmOrchestrator state machine
 agents/planner.py               Tree-of-Thoughts planner (3 branches)
-agents/executor.py              3-tier dispatch executor
-agents/critic.py                Self-consistency scoring + stuck detection
+agents/executor.py              3-tier dispatch + required-arg validation
+agents/critic.py                Self-consistency: min(optimistic, critical) scoring
 agents/researcher.py            Web research when stuck
 agents/memory_agent.py          Skill evolution + reflexion learning
 agents/debate.py                Multi-perspective deliberation
 agents/blackboard.py            Shared state + vector memory + checkpointing
 agents/base.py                  BaseAgent class
+```
+
+### LLM & Mode Classification (llm/)
+
+```
+llm/mode_classifier.py          Quick/agent/research routing with JARVIS gate
+llm/prompt_builder.py           Prompt construction with context injection
+llm/adapters.py                 Provider-specific message formatting
 ```
 
 ### Automation & Tools
@@ -292,7 +333,6 @@ tools/browser_tools.py            Browser action tool (14 actions)
 tools/builtin_tools.py            Core tool implementations
 tools/registry.py                 Tool registry
 tools/isolated_executor.py        Process isolation for risky tools
-core/session_persistence.py       Session save/restore across restarts
 gateway/ws_server.py              WebSocket server for remote control
 gateway/http_server.py            HTTP server + web UI
 gateway/web_ui.html               Mobile-first dark-theme dashboard
@@ -301,16 +341,21 @@ gateway/web_ui.html               Mobile-first dark-theme dashboard
 ### Data Flow
 
 ```
-Microphone -> Silero VAD -> Whisper STT -> Smart Router (12 layers)
-                                              |-> Cache replay (instant)
-                                              |-> Direct dispatch (CLI/Settings/API/Website/Tool)
-                                              |-> Brain (LLM + tool calling)
-                                              |-> Multi-Agent Swarm (complex tasks)
-                                              '-> Desktop Agent (UI automation)
+Microphone -> Silero VAD -> Whisper STT -> Mode Classifier (quick/agent/research)
+                                              |-> quick: Skill Library check first
+                                              |          -> template replay (instant)
+                                              |          -> LLM if no skill match
+                                              |-> agent: Multi-Agent Swarm
+                                              |          Plan -> Execute -> Critique -> Learn
+                                              |-> research: Web Agent
+                                              |             DuckDuckGo + Wikipedia + synthesis
+                                              '-> 12-layer strategy selector (all modes)
                                                         |
                                                   Execute + Verify
                                                         |
                                               Piper/gTTS -> Speaker
+                                                        |
+                                              Smart Proactive Check (4 triggers)
 ```
 
 ## Project Structure
@@ -335,7 +380,7 @@ G/
 +-- web_agent.py                # Web reading + search
 +-- memory.py                   # SQLite persistent memory
 +-- cognitive.py                # 6-phase cognitive engine
-+-- skills.py                   # Voyager-style skill library
++-- skills.py                   # Voyager-style skill library (28 trained)
 +-- embeddings.py               # FAISS vector store + embeddings
 +-- reminders.py                # NLP time parsing, recurring
 +-- weather.py                  # Open-Meteo (free, no API key)
@@ -352,7 +397,7 @@ G/
 +-- dashboard/                  # PyQt6 GUI dashboard
 +-- features/                   # Memory & workflow subsystems
 +-- gateway/                    # WebSocket + HTTP remote control
-+-- llm/                        # LLM adapters, prompt builder
++-- llm/                        # Mode classifier, prompt builder, LLM adapters
 +-- models/                     # Whisper + Piper models (auto-downloaded)
 +-- orchestration/              # Assistant loop, routing, recovery
 +-- platform_impl/              # Windows-specific implementations
@@ -483,14 +528,14 @@ Agent mode uses vision (screenshots) to understand the screen and makes decision
 - Internet for weather, news, web features (core works offline)
 
 ### Key Python Dependencies
-- `playwright` - Cross-browser automation
-- `faiss-cpu` - Vector similarity search
-- `sentence-transformers` - Text embeddings (all-MiniLM-L6-v2)
-- `faster-whisper` - GPU-accelerated speech-to-text
-- `piper-tts` - Neural text-to-speech
-- `pywinauto` - Windows UI automation
-- `pyautogui` - Mouse/keyboard control
-- `PyQt6` - GUI dashboard
+- `playwright` — Cross-browser automation
+- `faiss-cpu` — Vector similarity search
+- `sentence-transformers` — Text embeddings (all-MiniLM-L6-v2)
+- `faster-whisper` — GPU-accelerated speech-to-text
+- `piper-tts` — Neural text-to-speech
+- `pywinauto` — Windows UI automation
+- `pyautogui` — Mouse/keyboard control
+- `PyQt6` — GUI dashboard
 
 See `requirements.txt` for the full list.
 
@@ -538,10 +583,10 @@ ollama pull qwen2.5:32b
 
 **"piper-tts" install fails**
 - Piper requires specific Python version compatibility
-- Fallback TTS (pyttsx3) works without it - G auto-detects
+- Fallback TTS (pyttsx3) works without it — G auto-detects
 
 **Agent mode times out**
-- Large models (32B+) need more time - increase `ollama_timeout` in config.json
+- Large models (32B+) need more time — increase `ollama_timeout` in config.json
 - Try a smaller model: `ollama pull qwen2.5:7b`
 
 **Vision features not working**
@@ -560,7 +605,7 @@ playwright install chromium
 ### Run Diagnostics
 
 ```bash
-# Full self-test (checks all 17 subsystems)
+# Full self-test (checks all 24 subsystems)
 python run.py --selftest
 
 # Or from Python:
@@ -577,7 +622,7 @@ python run.py --update
 
 ## License
 
-MIT License - see [LICENSE](LICENSE)
+MIT License — see [LICENSE](LICENSE)
 
 ## Credits
 

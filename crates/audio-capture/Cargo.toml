@@ -1,0 +1,22 @@
+[package]
+name = "audio-capture"
+version = "0.1.0"
+edition = "2021"
+description = "Low-latency audio capture + VAD for the G voice assistant"
+authors = ["G Voice Assistant"]
+
+[[bin]]
+name = "audio_capture"
+path = "src/main.rs"
+
+[dependencies]
+cpal = "0.15"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+base64 = "0.21"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

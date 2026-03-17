@@ -129,6 +129,18 @@ class ExecutorAgent(BaseAgent):
 
         return {"success": False, "error": f"No strategy could execute: {desc}", "tool": "", "args": {}}
 
+    # Required args per tool — if missing, skip direct dispatch and let strategy
+    # selector handle it with full NL context instead of malformed args.
+    _REQUIRED_ARGS = {
+        "open_app":     ("name",),
+        "close_app":    ("name",),
+        "google_search":("query",),
+        "browser_action":("url",),
+        "type_text":    ("text",),
+        "run_terminal": ("command",),
+        "set_reminder": ("message",),
+    }
+
     def _try_direct_dispatch(self, desc: str, tool_hint: str) -> dict | None:
         """Try direct tool execution if we know the tool."""
         if not tool_hint:
@@ -136,6 +148,15 @@ class ExecutorAgent(BaseAgent):
 
         # Build args from description
         args = self._extract_args(desc, tool_hint)
+
+        # Validate required args — if any are missing/empty, don't call
+        # execute_tool with bad args (it would silently fail or do wrong thing)
+        required = self._REQUIRED_ARGS.get(tool_hint, ())
+        for req_key in required:
+            val = args.get(req_key, "")
+            if not val or (isinstance(val, str) and len(val.strip()) < 2):
+                logger.debug(f"Direct dispatch skipped for {tool_hint}: missing required arg '{req_key}'")
+                return None  # Let strategy selector handle with full context
 
         try:
             from brain import execute_tool

@@ -219,7 +219,7 @@ _PROVIDER_CONFIG = {
         "extract": _extract_content_anthropic,
         "headers": lambda key: {
             "x-api-key": key,
-            "anthropic-version": "2023-06-01",
+            "anthropic-version": "2024-06-01",
             "Content-Type": "application/json",
         },
     },

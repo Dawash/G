@@ -68,18 +68,20 @@ class CriticAgent(BaseAgent):
             return {"status": "ok", "score": 20, "verdict": "replan",
                     "reason": f"Stuck: {stuck}"}
 
-        # --- LLM Assessment (self-consistency: 2 evaluations) ---
+        # --- LLM Assessment (self-consistency: decoupled views) ---
+        # Optimistic: sees tool outputs + raw results only (no plan status)
+        # Critical:   sees goal text + failure patterns only (no tool history)
+        # Two different information views → genuinely independent assessments
         score1, reason1 = self._assess(goal, recent, plan, perspective="optimistic")
         score2, reason2 = self._assess(goal, recent, plan, perspective="critical")
 
-        # Take the more conservative score (safety-first)
+        # Take the MORE CONSERVATIVE score (safety-first) — do NOT average.
+        # Averaging was negating the safety-first invariant: if one view says 30
+        # and the other says 80, averaging gives 55 which is too optimistic.
         if score1 <= score2:
             final_score, reason = score1, reason1
         else:
             final_score, reason = score2, reason2
-
-        # Average for stability
-        final_score = (score1 + score2) // 2
 
         # --- Decide verdict ---
         verdict = self._decide_verdict(final_score, progress)
@@ -126,34 +128,46 @@ class CriticAgent(BaseAgent):
 
     def _assess(self, goal: str, recent: list, plan: list,
                 perspective: str = "critical") -> tuple:
-        """Single LLM assessment. Returns (score, reason)."""
-        action_summary = "\n".join(
-            f"  {i+1}. {a['tool']}({_brief_args(a['args'])}) -> "
-            f"{'OK' if a['success'] else 'FAIL'}: {a['result'][:80]}"
-            for i, a in enumerate(recent[-6:])
-        )
-        plan_summary = "\n".join(
-            f"  [{n.status}] {n.id}. {n.description[:60]}"
-            for n in plan[:10]
-        )
+        """Single LLM assessment using a specific information view.
 
-        tone = ("Be generous — assume partial success counts." if perspective == "optimistic"
-                else "Be strict — only count clear, verified successes.")
+        Optimistic view: sees tool names + raw outputs ONLY — no plan status.
+          Measures: "did the tools actually do something useful?"
+        Critical view: sees goal + failure count + error text ONLY — no plan.
+          Measures: "does the evidence of actual outcomes match the goal?"
 
-        prompt = (
-            f"You are a {perspective} evaluator for a desktop automation agent.\n\n"
-            f"Goal: \"{goal}\"\n\n"
-            f"Plan:\n{plan_summary}\n\n"
-            f"Recent actions:\n{action_summary}\n\n"
-            f"{tone}\n\n"
-            f"Rate overall progress toward the goal from 0-100:\n"
-            f"  0 = no progress / going backwards\n"
-            f"  50 = some progress but unclear\n"
-            f"  70 = good progress, on track\n"
-            f"  100 = goal fully achieved\n\n"
-            f"Return JSON: {{\"score\": 75, \"reason\": \"explanation\"}}\n"
-            f"JSON only."
-        )
+        Two different grounding sets → genuinely independent assessments.
+        """
+        if perspective == "optimistic":
+            # Tool-output view: what did the tools produce?
+            action_summary = "\n".join(
+                f"  {i+1}. {a['tool']} returned: {a['result'][:100]}"
+                for i, a in enumerate(recent[-6:])
+            )
+            prompt = (
+                f"Desktop automation goal: \"{goal}\"\n\n"
+                f"Tool outputs (last {min(6, len(recent))} actions):\n{action_summary}\n\n"
+                f"Based ONLY on the tool output text above (ignore plan status), "
+                f"how much of the goal has been achieved?\n"
+                f"Rate 0-100. 100 means the goal is fully accomplished.\n"
+                f"Return JSON: {{\"score\": 75, \"reason\": \"evidence from tool outputs\"}}\n"
+                f"JSON only."
+            )
+        else:
+            # Failure-pattern view: what went wrong?
+            failures = [a for a in recent if not a["success"]]
+            errors = "; ".join(a["result"][:60] for a in failures[-3:]) or "none"
+            fail_rate = round(len(failures) / max(len(recent), 1), 2)
+            prompt = (
+                f"Desktop automation goal: \"{goal}\"\n\n"
+                f"Execution statistics:\n"
+                f"  Total actions: {len(recent)}\n"
+                f"  Failures: {len(failures)} ({fail_rate*100:.0f}%)\n"
+                f"  Recent errors: {errors}\n\n"
+                f"Be strict — only count fully verified successes toward the goal.\n"
+                f"A high failure rate strongly suggests the goal is NOT achieved.\n"
+                f"Rate 0-100. Return JSON: {{\"score\": 40, \"reason\": \"failure analysis\"}}\n"
+                f"JSON only."
+            )
 
         raw = self._llm_call(prompt)
         try:
@@ -205,11 +219,22 @@ class CriticAgent(BaseAgent):
         return "abort"
 
     def _assess_completion(self, goal: str, recent: list) -> int:
-        """Quick completion assessment."""
+        """Completion check: success rate + keyword evidence in results."""
         success_count = sum(1 for a in recent if a["success"])
         if success_count == 0:
             return 30
-        return min(95, 60 + (success_count / max(len(recent), 1)) * 35)
+        base = min(90, 55 + (success_count / max(len(recent), 1)) * 35)
+
+        # Bonus: check if goal keywords appear in any tool result
+        goal_words = set(w.lower() for w in goal.split() if len(w) > 3)
+        all_results = " ".join(a.get("result", "") for a in recent[-4:]).lower()
+        keyword_hits = sum(1 for w in goal_words if w in all_results)
+        if keyword_hits >= 2:
+            base = min(95, base + 10)  # Evidence bonus
+        elif keyword_hits == 0 and success_count < len(recent):
+            base = max(30, base - 15)  # No evidence penalty
+
+        return int(base)
 
 
 def _brief_args(args: dict) -> str:

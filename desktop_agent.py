@@ -1018,7 +1018,9 @@ class DesktopAgent:
                     self._speak(done_msg)
                     return done_msg
             else:
-                self._stuck_count = 0
+                # Decay instead of hard reset: one successful turn reduces count by 1,
+                # not to 0. This way alternating success/fail still accumulates stuck evidence.
+                self._stuck_count = max(0, self._stuck_count - 1)
 
             if self._is_stuck():
                 last_tool = self._history[-1].get("tool", "") if self._history else ""
@@ -3767,6 +3769,19 @@ class DesktopAgent:
                              for w in ["error", "not found", "failed", "blocked", "timeout"])]
             if len(failed) >= 3:
                 return True
+
+        # Rolling failure rate: if >60% of last 8 turns failed → stuck regardless
+        # of tool diversity (catches success→fail→success→fail alternation)
+        if len(self._history) >= 8:
+            window = self._history[-8:]
+            fail_rate = sum(
+                1 for h in window
+                if any(w in h.get("result", "").lower()
+                       for w in ["error", "not found", "failed", "blocked", "timeout", "exception"])
+            ) / 8
+            if fail_rate >= 0.625:  # 5+ of 8 failed
+                return True
+
         return False
 
     def _get_openclaw_tools_prompt(self):

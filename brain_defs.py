@@ -132,11 +132,13 @@ def _run_terminal(command, admin=False):
             result = subprocess.run(
                 ["powershell", "-NoProfile", "-Command", ps_cmd],
                 capture_output=True, text=True, timeout=timeout,
+                encoding="utf-8", errors="replace",
             )
         else:
             result = subprocess.run(
                 ["powershell", "-NoProfile", "-Command", command],
                 capture_output=True, text=True, timeout=timeout,
+                encoding="utf-8", errors="replace",
             )
 
         output = result.stdout.strip() or result.stderr.strip()

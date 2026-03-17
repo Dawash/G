@@ -536,3 +536,95 @@ class HabitTracker:
                 elif habit["action"] == "weather":
                     suggestions.append("Want me to check the weather? You usually ask around now.")
         return suggestions
+
+    def smart_proactive_check(self, user_input, last_tool, last_tool_success,
+                               recent_commands, _cooldowns):
+        """Smart context-driven proactive suggestion (replaces every-20 counter).
+
+        Fires on 4 triggers — all rate-limited by topic to avoid spam:
+          1. Post-task follow-up: natural next step after a completed tool
+          2. Repetition: same command 3+ times in session → suggest automating
+          3. Keyword: 'tired/meeting/deadline/error' → contextual tip
+          4. Failure: tool failed → offer better approach
+
+        Args:
+            user_input:        What the user just said.
+            last_tool:         Tool that just ran (str) or None.
+            last_tool_success: Whether it succeeded (bool).
+            recent_commands:   List of recent user_input strings (last 10).
+            _cooldowns:        Mutable dict {topic: last_suggested_time} for rate limiting.
+
+        Returns:
+            str  — suggestion to append/speak, or None if nothing relevant.
+        """
+        import time as _t
+        import re as _re
+        now = _t.time()
+        COOLDOWN = 1800  # 30 min between same-topic suggestions
+
+        def _cooled(topic):
+            return now - _cooldowns.get(topic, 0) > COOLDOWN
+
+        def _mark(topic):
+            _cooldowns[topic] = now
+
+        # --- Trigger 1: Post-task contextual follow-up ---
+        _POST_TASK = {
+            "take_screenshot":  ("screenshot_followup",
+                                 "Want me to describe what's on screen?"),
+            "create_file":      ("file_followup",
+                                 "Want me to open or organize that file?"),
+            "play_music":       ("music_followup",
+                                 "Want me to start a focus timer while the music plays?"),
+            "google_search":    ("search_followup",
+                                 "Want me to save a summary of those results?"),
+            "run_terminal":     ("terminal_followup",
+                                 "Want me to save that output to a file?"),
+            "get_news":         ("news_followup",
+                                 "Want me to read the top story aloud?"),
+            "send_email":       ("email_followup",
+                                 "Email sent! Want me to set a follow-up reminder?"),
+            "agent_task":       ("agent_followup",
+                                 "Task done. Want me to save that as a repeatable shortcut?"),
+        }
+        if last_tool and last_tool_success and last_tool in _POST_TASK:
+            topic, msg = _POST_TASK[last_tool]
+            if _cooled(topic):
+                _mark(topic)
+                return msg
+
+        # --- Trigger 2: Repetition → suggest automation ---
+        if len(recent_commands) >= 3:
+            # Check if last 3 commands are semantically similar (same action)
+            _cmd = user_input.lower()
+            _matches = sum(1 for c in recent_commands[-5:]
+                           if any(w in c.lower() for w in _cmd.split()[:3]))
+            if _matches >= 3 and _cooled("repeat"):
+                _mark("repeat")
+                return ("I've noticed you keep doing this. "
+                        "Want me to save it as a one-word shortcut?")
+
+        # --- Trigger 3: Keyword-based context ---
+        _KEYWORD_TIPS = [
+            (r'\b(tired|exhausted|need a break|taking a break)\b',
+             "tired", "Want me to play something relaxing or set a break reminder?"),
+            (r'\b(meeting|presentation|call|zoom|teams)\b',
+             "meeting", "Want me to close distractions and set a meeting reminder?"),
+            (r'\b(deadline|urgent|focus|pomodoro|work time)\b',
+             "focus", "Want me to start a 25-minute focus timer and mute notifications?"),
+            (r'\b(not working|broken|keep failing|error|problem)\b',
+             "error", "Want me to search for a fix or try a different approach?"),
+            (r'\b(morning|wake up|just woke|good morning)\b',
+             "morning", "Want me to run your morning briefing — weather, news, and reminders?"),
+        ]
+        for pattern, topic, msg in _KEYWORD_TIPS:
+            if _re.search(pattern, user_input, _re.I) and _cooled(topic):
+                _mark(topic)
+                return msg
+
+        # --- Trigger 4: Failure → offer recovery ---
+        if last_tool and not last_tool_success and _cooled("failure"):
+            _mark("failure")
+            return f"That didn't work as expected. Want me to try a different approach?"
+
+        return None

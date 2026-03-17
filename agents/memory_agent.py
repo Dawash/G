@@ -15,6 +15,7 @@ Upgrades from ExperienceLearner + SkillLibrary:
 
 import json
 import logging
+import threading
 import time
 
 from .base import BaseAgent
@@ -46,6 +47,11 @@ class MemoryAgent(BaseAgent):
 
         if success:
             skills_saved = self._save_skill(goal)
+            if skills_saved:
+                # Background: improve the newly saved skill with thinking LLM
+                threading.Thread(
+                    target=self._bg_improve_skill, args=(goal,), daemon=True
+                ).start()
         else:
             reflexions_stored = self._store_reflexions(goal)
 
@@ -220,6 +226,36 @@ class MemoryAgent(BaseAgent):
                     )
         except Exception:
             pass
+
+
+    def _bg_improve_skill(self, goal: str):
+        """Background: run SkillTrainer.improve_one() on the just-saved skill."""
+        try:
+            from skills import SkillTrainer, SkillLibrary
+            from brain import _brain_state
+            brain = getattr(_brain_state, 'brain_instance', None)
+            if brain is None:
+                return
+            lib = SkillLibrary()
+            matches = lib.find_skill(goal, min_similarity=0.85, limit=1)
+            if not matches:
+                return
+            skill_name = matches[0].get("name", "")
+            if not skill_name:
+                return
+            trainer = SkillTrainer(
+                llm_fn=brain.quick_chat,
+                thinking_fn=getattr(brain, 'thinking_chat', brain.quick_chat),
+                skill_lib=lib,
+            )
+            report = trainer.improve_one(skill_name)
+            if report and report.get("version_bumped"):
+                logger.info(
+                    f"[memory] Auto-improved '{skill_name}': "
+                    f"{report['old_score']}→{report['new_score']}"
+                )
+        except Exception as e:
+            logger.debug(f"[memory] bg improve failed: {e}")
 
 
 def _brief(args: dict) -> str:
