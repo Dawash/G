@@ -597,6 +597,17 @@ def run(runtime_state=None):
         except Exception as _cam_err:
             logger.debug(f"Camera init: {_cam_err}")
 
+    # Phase 2f: Camera vision system (webcam + IP cameras for LLM vision tools)
+    try:
+        from camera.camera_manager import camera_mgr as _camera_mgr
+        _camera_mgr.load_ip_cameras_from_config(config)
+        _discovered_cameras = _camera_mgr.discover_cameras()
+        if _discovered_cameras:
+            logger.info(f"Camera system: {len(_discovered_cameras)} camera(s)")
+            print(f"  [Camera] {len(_discovered_cameras)} camera(s) detected")
+    except Exception as _cam_sys_err:
+        logger.debug(f"Camera system init: {_cam_sys_err}")
+
     # Gesture-based controls (if camera active)
     if _camera:
         @bus.on("perception.camera.gesture")
@@ -843,6 +854,12 @@ def run(runtime_state=None):
                 _web_ui.stop()
             if _camera:
                 _camera.stop()
+            # Camera vision system cleanup
+            try:
+                from camera.camera_manager import camera_mgr as _cam_mgr_cleanup
+                _cam_mgr_cleanup.close_all()
+            except Exception:
+                pass
             # Session continuity — save before exit
             try:
                 _session_persistence.save(brain, _ss)

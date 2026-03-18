@@ -93,6 +93,13 @@ from tools.memory_workflow_tools import register_memory_workflow_tools as _regis
 from tools.browser_tools import register_browser_tools as _register_browser_tools
 from tools.interactive_tools import register_interactive_tools as _register_interactive_tools
 
+# Camera tools (optional — depends on opencv-python)
+try:
+    from camera.camera_tools import register_camera_tools as _register_camera_tools
+    _HAS_CAMERA_TOOLS = True
+except ImportError:
+    _HAS_CAMERA_TOOLS = False
+
 # Phase 8: Execution tiers, contracts, failure journal
 from core.execution_tiers import classify_tier as _classify_tier, check_tier_policy as _check_tier_policy
 from core.tool_contracts import validate_call as _validate_contract
@@ -246,6 +253,13 @@ try:
     _register_code_interpreter(_tool_registry)
 except Exception:
     pass
+
+# Camera tools (webcam + IP camera + vision analysis)
+if _HAS_CAMERA_TOOLS:
+    try:
+        _register_camera_tools(_tool_registry)
+    except Exception as _cam_err:
+        logger.debug("Camera tools: %s", _cam_err)
 
 # Set registry as the global default (used by brain_defs.py for resolution)
 from tools.registry import set_default as _set_default_registry
