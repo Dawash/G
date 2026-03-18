@@ -103,6 +103,11 @@ class ChatProvider:
         except requests.HTTPError as e:
             logging.error(f"API call failed ({self.provider_name}): {e}")
             self.messages.pop()  # Permanent error — remove message
+            try:
+                from core.observability import metrics as _obs
+                _obs.record_failure("llm.chat", error=str(e)[:200])
+            except Exception:
+                pass
             if e.response is not None and e.response.status_code == 429:
                 wait = _record_rate_limit(self.provider_name)
                 return f"I'm being rate limited by the API. I'll retry in {wait} seconds. Try again shortly."
@@ -111,10 +116,20 @@ class ChatProvider:
             # Transient error — pop message to prevent stale duplication on next call
             logging.error(f"API call failed ({self.provider_name}, transient): {e}")
             self.messages.pop()
+            try:
+                from core.observability import metrics as _obs
+                _obs.record_failure("llm.chat", error=str(e)[:200])
+            except Exception:
+                pass
             return self._offline_fallback(user_input)
         except Exception as e:
             logging.error(f"API call failed ({self.provider_name}): {e}")
             self.messages.pop()  # Unknown error — remove message to avoid corruption
+            try:
+                from core.observability import metrics as _obs
+                _obs.record_failure("llm.chat", error=str(e)[:200])
+            except Exception:
+                pass
             return self._offline_fallback(user_input)
 
     def _call_api(self):
@@ -176,6 +191,7 @@ class OllamaProvider(ChatProvider):
             *self.messages,
         ]
         timeout = self._get_timeout()
+        _api_t0 = time.time()
         try:
             response = requests.post(
                 f"{self.ollama_url}/api/chat",
@@ -188,7 +204,13 @@ class OllamaProvider(ChatProvider):
             )
             response.raise_for_status()
             data = response.json()
-            return data["message"]["content"]
+            result = data["message"]["content"]
+            try:
+                from core.observability import metrics as _obs
+                _obs.record_success("llm.chat", duration_ms=(time.time() - _api_t0) * 1000)
+            except Exception:
+                pass
+            return result
         except requests.exceptions.HTTPError:
             # Fallback to OpenAI-compatible endpoint (newer Ollama)
             response = requests.post(
@@ -201,7 +223,13 @@ class OllamaProvider(ChatProvider):
             )
             response.raise_for_status()
             data = response.json()
-            return data["choices"][0]["message"]["content"]
+            result = data["choices"][0]["message"]["content"]
+            try:
+                from core.observability import metrics as _obs
+                _obs.record_success("llm.chat", duration_ms=(time.time() - _api_t0) * 1000)
+            except Exception:
+                pass
+            return result
 
     def stream_response(self, messages_with_system):
         """Stream tokens from Ollama one at a time.

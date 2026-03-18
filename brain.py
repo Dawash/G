@@ -2567,6 +2567,8 @@ class Brain:
         """
         from ai_providers import is_rate_limited, _record_rate_limit, _clear_rate_limit
 
+        _think_t0 = time.time()
+
         # Reset cancellation flag at start of each think() call
         self._cancelled = False
         # Allow execute_tool to check cancellation
@@ -3013,6 +3015,11 @@ class Brain:
             if result and _is_error_result(result):
                 result = _friendly_error(str(result), user_input=user_input)
 
+            try:
+                from core.observability import metrics as _obs
+                _obs.record_success("brain.think", duration_ms=(time.time() - _think_t0) * 1000)
+            except Exception:
+                pass
             return result
 
         except requests.HTTPError as e:
@@ -3061,6 +3068,12 @@ class Brain:
         except Exception as e:
             self._pop_user_message()
             logger.error(f"Brain error: {e}", exc_info=True)
+            try:
+                from core.observability import metrics as _obs
+                _obs.record_failure("brain.think", error=str(e)[:200],
+                                    duration_ms=(time.time() - _think_t0) * 1000)
+            except Exception:
+                pass
             return None
 
     def stream_think(self, user_input, detected_language=None):

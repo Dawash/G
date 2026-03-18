@@ -558,6 +558,21 @@ html, body {
       <div class="metric-bar"><div class="metric-bar-fill" id="bar-battery" style="width:0%"></div></div>
     </div>
 
+    <div class="health-section" style="margin-top: 12px; padding-top: 8px; border-top: 1px solid rgba(0,168,255,0.1);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim);">System Health</span>
+            <span id="system-health" style="padding: 1px 6px; border-radius: 3px; font-size: 0.65rem; font-weight: 600; background: rgba(0,255,136,0.15); color: #00ff88;">HEALTHY</span>
+        </div>
+        <div style="display: flex; gap: 16px; font-size: 0.75rem; color: var(--muted); margin-bottom: 4px;">
+            <span>Uptime: <span id="uptime">--</span></span>
+            <span>Queries: <span id="interaction-count">0</span></span>
+        </div>
+        <div id="component-health" style="font-size: 0.7rem;"></div>
+        <div id="recent-errors" style="font-size: 0.7rem; margin-top: 4px;">
+            <span style="color: var(--text-dim);">No recent errors</span>
+        </div>
+    </div>
+
     <div class="section-title" style="margin-top:4px;">Context</div>
     <div class="metric-row" style="flex-direction:column;align-items:flex-start;gap:4px;">
       <span class="metric-label">ACTIVE WINDOW</span>
@@ -938,6 +953,47 @@ function handleEvent(ev) {
     case 'ping':
       ws && ws.send(JSON.stringify({type:'pong'}));
       break;
+
+    case 'health_update':
+    case 'system.health_update': {
+      var d = payload || {};
+      var hel = document.getElementById('system-health');
+      if (hel && d.health) {
+        hel.textContent = d.health.toUpperCase();
+        var colors = {healthy: '#00ff88', degraded: '#ff9500', critical: '#ff3b3b'};
+        var bgs = {healthy: 'rgba(0,255,136,0.15)', degraded: 'rgba(255,149,0,0.15)', critical: 'rgba(255,59,59,0.15)'};
+        hel.style.color = colors[d.health] || '#888';
+        hel.style.background = bgs[d.health] || 'transparent';
+      }
+      var uel = document.getElementById('uptime');
+      if (uel) uel.textContent = d.uptime || '--';
+      var iel = document.getElementById('interaction-count');
+      if (iel) iel.textContent = d.interactions || 0;
+      var cel = document.getElementById('component-health');
+      if (cel && d.components) {
+        var html = '';
+        for (var name in d.components) {
+          var c = d.components[name];
+          var color = c.health === 'healthy' ? '#00ff88' : (c.health === 'degraded' ? '#ff9500' : '#ff3b3b');
+          html += '<div style="display:flex;justify-content:space-between;padding:1px 0;color:var(--muted);">';
+          html += '<span>' + name + '</span>';
+          html += '<span style="color:' + color + ';">' + c.success_rate + '% \u00B7 ' + c.avg_latency_ms + 'ms</span>';
+          html += '</div>';
+        }
+        cel.innerHTML = html;
+      }
+      var eel = document.getElementById('recent-errors');
+      if (eel && d.recent_errors && d.recent_errors.length > 0) {
+        var ehtml = '';
+        d.recent_errors.slice(-3).forEach(function(err) {
+          ehtml += '<div style="color:#ff9500;padding:1px 0;">' + err.component + ': ' + (err.error||'').substring(0,40) + '</div>';
+        });
+        eel.innerHTML = ehtml;
+      } else if (eel && d.recent_errors && d.recent_errors.length === 0) {
+        eel.innerHTML = '<span style="color: var(--text-dim);">No recent errors</span>';
+      }
+      break;
+    }
 
     default:
       addLog(type, JSON.stringify(payload).slice(0, 100));

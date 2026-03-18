@@ -492,6 +492,14 @@ def run(runtime_state=None):
     except Exception as _pe_err:
         logger.debug(f"Proactive engine init skipped: {_pe_err}")
 
+    # Observability — centralized metrics collection
+    try:
+        from core.observability import start_observability
+        start_observability()
+        logger.info("Observability started")
+    except Exception as _obs_err:
+        logger.debug(f"Observability init skipped: {_obs_err}")
+
     # Phase 2b: Load plugins (Mycroft-style skill system)
     try:
         from plugins.loader import PluginLoader
@@ -800,6 +808,11 @@ def run(runtime_state=None):
                     _proactive.stop()
                 except Exception:
                     pass
+            try:
+                from core.observability import metrics as _obs
+                _obs.stop()
+            except Exception:
+                pass
             bus.publish(Topics.SHUTDOWN, {"reason": "user_exit", "input": user_input},
                         source="assistant_loop")
             bus.shutdown()
@@ -947,6 +960,12 @@ def run(runtime_state=None):
                     _fp_result.handler_key or "multi_step", "fast_path", _fp_elapsed)
             except Exception as e:
                 logger.debug(f"Non-critical: {type(e).__name__}: {e}")
+            try:
+                from core.observability import metrics as _obs
+                _obs.record_success("fast_path")
+                _obs.record_interaction()
+            except Exception:
+                pass
             continue
 
         # Also try single-command match for error recovery path
@@ -1127,6 +1146,16 @@ def run(runtime_state=None):
                         get_feedback().record_success("brain_think", "brain", _elapsed)
                     else:
                         get_feedback().record_failure("brain_think", "brain", "returned None")
+                except Exception:
+                    pass
+                # Track brain metrics for observability
+                try:
+                    from core.observability import metrics as _obs
+                    if response:
+                        _obs.record_success("brain.think", duration_ms=_elapsed * 1000)
+                    else:
+                        _obs.record_failure("brain.think", error="returned None", duration_ms=_elapsed * 1000)
+                    _obs.record_interaction()
                 except Exception:
                     pass
             except Exception as e:
