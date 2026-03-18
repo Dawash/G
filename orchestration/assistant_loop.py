@@ -416,6 +416,19 @@ def run(runtime_state=None):
         cloud_model=cloud_model,
     )
 
+    # Create interaction handler (used for exit/meta/connection detection)
+    from orchestration.interaction_handler import InteractionHandler
+    _handler = InteractionHandler(
+        brain=brain,
+        config=config,
+        services={
+            "memory": memory,
+            "reminder_mgr": reminder_mgr,
+            "action_map": action_map,
+            "provider": provider,
+        },
+    )
+
     # Session continuity — restore previous session
     from core.session_persistence import SessionPersistence
     _session_persistence = SessionPersistence()
@@ -520,6 +533,7 @@ def run(runtime_state=None):
             pass
         if loaded > 0:
             logger.info(f"Plugins: {loaded} loaded, {errors} errors")
+        _handler.set_plugin_loader(_plugin_loader)
     except Exception as e:
         logger.debug(f"Plugin system init: {e}")
         _plugin_loader = None
