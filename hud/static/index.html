@@ -515,6 +515,7 @@ html, body {
     </div>
     <div class="header-right">
       <div id="date-str" style="letter-spacing:1px;">---</div>
+      <span id="camera-indicator" title="Camera (EDITH)" style="opacity: 0.3; font-size: 0.8rem;">&#x1F4F7;</span>
       <div style="display:flex;align-items:center;gap:6px;">
         <div id="ws-indicator"></div>
         <span id="ws-label">OFFLINE</span>
@@ -995,8 +996,29 @@ function handleEvent(ev) {
       break;
     }
 
-    default:
+    default: {
+      // Camera perception events
+      var topic = type || '';
+      if (topic.includes('camera.started')) {
+        var ci = document.getElementById('camera-indicator');
+        if (ci) { ci.style.opacity = '1'; ci.title = 'Camera active'; }
+        addLog('startup', 'Camera perception started');
+      }
+      if (topic.includes('camera.stopped')) {
+        var ci2 = document.getElementById('camera-indicator');
+        if (ci2) { ci2.style.opacity = '0.3'; ci2.title = 'Camera off'; }
+        addLog('context', 'Camera perception stopped');
+      }
+      if (topic.includes('camera.gesture')) {
+        addLog('tool_called', 'Gesture: ' + ((payload && payload.gesture) || '?'));
+      }
+      if (topic.includes('camera.user_present')) {
+        var present = payload && payload.present;
+        addLog(present ? 'startup' : 'state_idle', present ? 'User detected' : 'User left');
+      }
       addLog(type, JSON.stringify(payload).slice(0, 100));
+      break;
+    }
   }
 }
 

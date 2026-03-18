@@ -1,3 +1,5 @@
+# DEPRECATED: Use memory.semantic_memory.VectorStore instead.
+# Kept for backward compatibility with skills.py and agents/blackboard.py.
 """
 Vector Store — FAISS-backed semantic search with sentence-transformers.
 

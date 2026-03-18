@@ -23,5 +23,8 @@
 # Phase 13 modules:
 #   memory_workflow_tools.py — 2 tools (memory_control, run_workflow)
 #
+# Calendar:
+#   calendar_tools.py — 2 tools (add_calendar_event, get_calendar_events)
+#
 # Browser automation:
 #   browser_tools.py — browser_action via persistent CDP session (overwrites desktop_tools version)

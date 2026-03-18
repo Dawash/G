@@ -577,6 +577,37 @@ def run(runtime_state=None):
         except Exception as _hud_err:
             logger.debug(f"HUD server init skipped: {_hud_err}")
 
+    # Phase 2e: Camera perception (EDITH mode) — disabled by default
+    _camera = None
+    if config.get("camera_enabled", False):
+        try:
+            from perception.camera import CameraPerception
+            _camera = CameraPerception(
+                camera_index=config.get("camera_index", 0),
+                fps=config.get("camera_fps", 5.0),
+            )
+            if _camera.is_available:
+                if _camera.start():
+                    logger.info("Camera perception active (EDITH mode)")
+                    print("  [Camera] EDITH mode active")
+                else:
+                    _camera = None
+            else:
+                _camera = None
+        except Exception as _cam_err:
+            logger.debug(f"Camera init: {_cam_err}")
+
+    # Gesture-based controls (if camera active)
+    if _camera:
+        @bus.on("perception.camera.gesture")
+        def _on_gesture(event):
+            gesture = event.payload.get("gesture", "") if hasattr(event, 'payload') else ""
+            if gesture == "open_palm":
+                try:
+                    stop_speaking()
+                except Exception:
+                    pass
+
     ollama_was_down = [False]
     _start_ollama_health_monitor(provider_name, ollama_was_down, ollama_url=ollama_url)
 
@@ -810,6 +841,8 @@ def run(runtime_state=None):
                 _gateway.stop()
             if _web_ui:
                 _web_ui.stop()
+            if _camera:
+                _camera.stop()
             # Session continuity — save before exit
             try:
                 _session_persistence.save(brain, _ss)

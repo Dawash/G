@@ -233,6 +233,13 @@ _register_browser_tools(_tool_registry)  # CDP persistent session (overwrites de
 _register_mw_tools(_tool_registry)
 _register_interactive_tools(_tool_registry)  # ask_user_choice, ask_user_input, ask_yes_no
 
+# Calendar tools (local calendar management)
+try:
+    from tools.calendar_tools import register_calendar_tools as _register_calendar_tools
+    _register_calendar_tools(_tool_registry)
+except Exception as _cal_err:
+    logger.debug("Calendar tools: %s", _cal_err)
+
 # Code Interpreter (safe Python sandbox)
 try:
     from tools.code_interpreter import register_code_interpreter as _register_code_interpreter
