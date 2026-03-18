@@ -1,4 +1,15 @@
-"""agent package — desktop automation agent."""
-from agent.desktop_agent import DesktopAgent, ObservationStrategy, ActionExecutor, ActionType, Action
+"""Desktop automation agent — observe -> think -> act -> verify loop."""
 
-__all__ = ["DesktopAgent", "ObservationStrategy", "ActionExecutor", "ActionType", "Action"]
+from agent.desktop_agent import (
+    DesktopAgent,
+    Observer as ObservationStrategy,
+    Executor as ActionExecutor,
+    ActionType,
+    Action,
+    StepResult,
+)
+
+__all__ = [
+    "DesktopAgent", "ObservationStrategy", "ActionExecutor",
+    "ActionType", "Action", "StepResult",
+]
