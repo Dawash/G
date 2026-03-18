@@ -31,8 +31,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-# Initialize engines once at module level
-_engine = pyttsx3.init()
+# Initialize engines once at module level (configured once, not reassigned)
 _recognizer = sr.Recognizer()
 
 # Speed optimization: lower energy threshold so it picks up speech faster
@@ -42,53 +41,129 @@ _recognizer.pause_threshold = 0.5  # Shorter pause = faster end-of-speech detect
 _recognizer.phrase_threshold = 0.2  # Faster phrase start detection (default 0.3)
 _recognizer.non_speaking_duration = 0.3  # Less silence needed (default 0.5)
 
-# Calibrate ambient noise once, not every listen cycle
-_calibrated = False
-
 # Input mode: "voice", "text", or "hybrid" (voice with text fallback)
 _input_mode = os.environ.get("G_INPUT_MODE", "hybrid").lower()
 
-# TTS lock for thread safety
-_tts_lock = threading.Lock()
-
-# Barge-in: set to interrupt speech mid-sentence
-_stop_speaking = threading.Event()
-
-# Suppress listening during own TTS playback (prevents echo pickup)
-_is_speaking = threading.Event()
-
-# Global audio flag — set when ANY audio output is playing (TTS, alarm, music)
-# Listening code checks this to avoid picking up system audio as speech
-_audio_playing = threading.Event()
-
-# Post-TTS cooldown duration (seconds) — ignore mic input after TTS ends
-# Prevents "Going to sleep. Say Hey G to wake me." from triggering wake word
-_POST_TTS_COOLDOWN_S = 2.0
-
-# Echo detection: track last spoken text to filter self-hearing
-_last_spoken_text = ""
-_speak_end_time = 0.0
-_echo_lock = threading.Lock()
 
 # ===================================================================
-# Mic state tracking (for dashboard and state machine)
+# SpeechEngine — holds all mutable speech subsystem state
 # ===================================================================
 
-_mic_state = "IDLE"  # IDLE | LISTENING | PROCESSING | SPEAKING
-_mic_state_lock = threading.Lock()
+class SpeechEngine:
+    """Encapsulates all mutable state for the speech subsystem.
+
+    A module-level singleton ``engine`` is created after the class definition.
+    Every function in this module reads/writes ``engine.<attr>`` instead of
+    bare ``_<attr>`` globals, eliminating ``global`` declarations and making
+    the state surface explicit and testable.
+    """
+
+    def __init__(self):
+        # pyttsx3 TTS engine (may be re-created on RuntimeError)
+        self.tts_engine = pyttsx3.init()
+
+        # Calibrate ambient noise once, not every listen cycle
+        self.calibrated = False
+
+        # TTS lock for thread safety
+        self.tts_lock = threading.Lock()
+
+        # Barge-in: set to interrupt speech mid-sentence
+        self.stop_speaking = threading.Event()
+
+        # Suppress listening during own TTS playback (prevents echo pickup)
+        self.is_speaking = threading.Event()
+
+        # Global audio flag — set when ANY audio output is playing (TTS, alarm, music)
+        # Listening code checks this to avoid picking up system audio as speech
+        self.audio_playing = threading.Event()
+
+        # Post-TTS cooldown duration (seconds) — ignore mic input after TTS ends
+        self.post_tts_cooldown_s = 2.0
+
+        # Echo detection: track last spoken text to filter self-hearing
+        self.last_spoken_text = ""
+        self.speak_end_time = 0.0
+        self.echo_lock = threading.Lock()
+
+        # Mic state tracking (for dashboard and state machine)
+        self.mic_state = "IDLE"  # IDLE | LISTENING | PROCESSING | SPEAKING
+        self.mic_state_lock = threading.Lock()
+
+        # Wake words
+        self.wake_words: set = set()
+
+        # Persistent PyAudio for wake word detection
+        self.persistent_pa = None
+        self.persistent_stream = None
+
+        # Silero VAD
+        self.vad_model = None
+        self.vad_lock = threading.Lock()
+        self.vad_failed = False
+
+        # VAD sensitivity — overridden by _load_speech_config()
+        self.vad_speech_threshold = 0.4
+        self.vad_silence_timeout_ms = 900
+        self.wake_word_fuzzy_threshold = 0.6
+
+        # Language tracking
+        self.detected_language = "en"
+        self.language_lock = threading.Lock()
+        self.next_speak_language = None  # One-shot override
+
+        # Whisper STT
+        self.whisper_model = None
+        self.whisper_lock = threading.Lock()
+        self.whisper_failed = False
+        self.whisper_backend = None  # "whisperx" or "faster_whisper"
+
+        # pygame mixer
+        self.pygame_initialized = False
+        self.pygame_lock = threading.Lock()
+
+        # Piper TTS
+        self.piper_voice = None
+        self.piper_lock = threading.Lock()
+        self.piper_failed = False
+
+        # STT engine selection
+        self.stt_engine = os.environ.get("G_STT_ENGINE", "whisper").lower()
+
+    def reset(self):
+        """Reset mutable state. Safe for error recovery."""
+        self.calibrated = False
+        self.last_spoken_text = ""
+        self.speak_end_time = 0.0
+        self.stop_speaking.clear()
+        self.is_speaking.clear()
+        self.detected_language = "en"
+        self.mic_state = "IDLE"
+
+    def status(self) -> dict:
+        """Current speech system state for observability."""
+        return {
+            "mic_state": self.mic_state,
+            "is_speaking": self.is_speaking.is_set(),
+            "calibrated": self.calibrated,
+            "whisper_loaded": self.whisper_model is not None,
+            "detected_language": self.detected_language,
+        }
+
+
+engine = SpeechEngine()
 
 
 def get_mic_state():
     """Get current mic state."""
-    with _mic_state_lock:
-        return _mic_state
+    with engine.mic_state_lock:
+        return engine.mic_state
 
 
 def set_mic_state(state):
     """Set mic state (IDLE, LISTENING, PROCESSING, SPEAKING)."""
-    global _mic_state
-    with _mic_state_lock:
-        _mic_state = state
+    with engine.mic_state_lock:
+        engine.mic_state = state
 
 
 def set_audio_playing(playing=True):
@@ -98,21 +173,19 @@ def set_audio_playing(playing=True):
     picking up system audio as user speech.
     """
     if playing:
-        _audio_playing.set()
+        engine.audio_playing.set()
     else:
-        _audio_playing.clear()
+        engine.audio_playing.clear()
 
 
 def is_audio_playing():
     """Check if any audio output is active (TTS, alarm, music)."""
-    return _audio_playing.is_set() or _is_speaking.is_set()
+    return engine.audio_playing.is_set() or engine.is_speaking.is_set()
 
 
 # ===================================================================
 # Wake word detection
 # ===================================================================
-
-_wake_words = set()
 
 
 def _build_wake_words(ai_name):
@@ -132,9 +205,8 @@ def _build_wake_words(ai_name):
 
 def init_wake_words(ai_name):
     """Initialize wake words from config AI name."""
-    global _wake_words
-    _wake_words = _build_wake_words(ai_name)
-    logging.info(f"Wake words: {_wake_words}")
+    engine.wake_words = _build_wake_words(ai_name)
+    logging.info(f"Wake words: {engine.wake_words}")
 
 
 def listen_for_wake_word(timeout_s=None):
@@ -144,7 +216,7 @@ def listen_for_wake_word(timeout_s=None):
     """
     from difflib import SequenceMatcher
 
-    if not _wake_words:
+    if not engine.wake_words:
         return True  # No wake words configured, always active
 
     set_mic_state("LISTENING")
@@ -156,15 +228,15 @@ def listen_for_wake_word(timeout_s=None):
             return None
 
         # Skip listening while system audio is playing (TTS, alarm, music)
-        if _is_speaking.is_set() or _audio_playing.is_set():
+        if engine.is_speaking.is_set() or engine.audio_playing.is_set():
             time.sleep(0.3)
             continue
 
         # Post-TTS cooldown: reject wake words shortly after TTS ends
         # Prevents "Say Hey G to wake me" from triggering a false wake
-        with _echo_lock:
-            _time_since_tts = time.time() - _speak_end_time
-        if _time_since_tts < _POST_TTS_COOLDOWN_S:
+        with engine.echo_lock:
+            _time_since_tts = time.time() - engine.speak_end_time
+        if _time_since_tts < engine.post_tts_cooldown_s:
             time.sleep(0.2)
             continue
 
@@ -175,7 +247,7 @@ def listen_for_wake_word(timeout_s=None):
             logging.warning("VAD unavailable for wake word detection, falling back to energy-based listen")
             try:
                 with sr.Microphone() as source:
-                    if not _calibrated:
+                    if not engine.calibrated:
                         _recognizer.adjust_for_ambient_noise(source, duration=0.3)
                     audio = _recognizer.listen(source, timeout=5, phrase_time_limit=2)
                 wav_data = audio.get_wav_data()
@@ -202,12 +274,12 @@ def listen_for_wake_word(timeout_s=None):
                         pass
                 if fb_text and not _is_noise(fb_text):
                     fb_lower = fb_text.lower().strip().rstrip(".,!?")
-                    if fb_lower in _wake_words:
+                    if fb_lower in engine.wake_words:
                         set_mic_state("IDLE")
                         return True
-                    for wake in _wake_words:
+                    for wake in engine.wake_words:
                         ratio = SequenceMatcher(None, fb_lower, wake).ratio()
-                        if ratio >= _WAKE_WORD_FUZZY_THRESHOLD:
+                        if ratio >= engine.wake_word_fuzzy_threshold:
                             logging.info(f"Wake word fuzzy match (energy fallback): '{fb_lower}' ~ '{wake}' ({ratio:.2f})")
                             set_mic_state("IDLE")
                             return True
@@ -248,12 +320,12 @@ def listen_for_wake_word(timeout_s=None):
         text_lower = text.lower().strip().rstrip(".,!?")
 
         # Exact match
-        if text_lower in _wake_words:
+        if text_lower in engine.wake_words:
             set_mic_state("IDLE")
             return True
 
         # Fuzzy match
-        for wake in _wake_words:
+        for wake in engine.wake_words:
             ratio = SequenceMatcher(None, text_lower, wake).ratio()
             if ratio >= 0.6:
                 logging.info(f"Wake word fuzzy match: '{text_lower}' ~ '{wake}' ({ratio:.2f})")
@@ -309,57 +381,49 @@ def _reinitialize_mic(pa):
 _MIC_RECOVERY_MAX_RETRIES = 3
 
 
-# Persistent PyAudio instance for wake word detection — avoids
-# creating/destroying audio streams every 5 seconds which causes
-# Windows mic lockups and missed wake words
-_persistent_pa = None
-_persistent_stream = None
-
 def _get_persistent_mic():
     """Get or create a persistent mic stream for wake word detection."""
-    global _persistent_pa, _persistent_stream
     import pyaudio
-    if _persistent_stream is not None:
+    if engine.persistent_stream is not None:
         try:
-            _persistent_stream.is_active()
-            return _persistent_pa, _persistent_stream
+            engine.persistent_stream.is_active()
+            return engine.persistent_pa, engine.persistent_stream
         except Exception:
             # Stream died — recreate
-            _persistent_stream = None
-    if _persistent_pa is None:
-        _persistent_pa = pyaudio.PyAudio()
+            engine.persistent_stream = None
+    if engine.persistent_pa is None:
+        engine.persistent_pa = pyaudio.PyAudio()
     try:
-        _persistent_stream = _persistent_pa.open(
+        engine.persistent_stream = engine.persistent_pa.open(
             format=pyaudio.paInt16, channels=1,
             rate=_VAD_SAMPLE_RATE, input=True,
             frames_per_buffer=_VAD_CHUNK_SAMPLES)
-        return _persistent_pa, _persistent_stream
+        return engine.persistent_pa, engine.persistent_stream
     except Exception as e:
         logging.warning(f"Persistent mic open failed: {e}")
         return None, None
 
 def _close_persistent_mic():
     """Close persistent mic (called on shutdown or mode change)."""
-    global _persistent_pa, _persistent_stream
-    if _persistent_stream:
+    if engine.persistent_stream:
         try:
-            _persistent_stream.stop_stream()
-            _persistent_stream.close()
+            engine.persistent_stream.stop_stream()
+            engine.persistent_stream.close()
         except Exception:
             pass
-        _persistent_stream = None
-    if _persistent_pa:
+        engine.persistent_stream = None
+    if engine.persistent_pa:
         try:
-            _persistent_pa.terminate()
+            engine.persistent_pa.terminate()
         except Exception:
             pass
-        _persistent_pa = None
+        engine.persistent_pa = None
 
 
 def _listen_vad_short(max_speech_s=2.0, wait_timeout_s=5.0):
     """Short VAD listen for wake word detection. Returns WAV path or None."""
     # Don't listen while system audio is playing
-    if _is_speaking.is_set() or _audio_playing.is_set():
+    if engine.is_speaking.is_set() or engine.audio_playing.is_set():
         return None
 
     vad = _get_vad_model()
@@ -392,7 +456,7 @@ def _listen_vad_short(max_speech_s=2.0, wait_timeout_s=5.0):
         speech_frames = []
         is_speaking = False
         silence_chunks = 0
-        silence_needed = int(_VAD_SILENCE_TIMEOUT_MS / 32)
+        silence_needed = int(engine.vad_silence_timeout_ms / 32)
         max_chunks = int(max_speech_s * _VAD_SAMPLE_RATE / _VAD_CHUNK_SAMPLES)
         max_wait = int(wait_timeout_s * _VAD_SAMPLE_RATE / _VAD_CHUNK_SAMPLES)
         total = wait = 0
@@ -426,7 +490,7 @@ def _listen_vad_short(max_speech_s=2.0, wait_timeout_s=5.0):
 
             if not is_speaking:
                 pre_buf.append(raw)
-                if conf >= _VAD_SPEECH_THRESHOLD:
+                if conf >= engine.vad_speech_threshold:
                     is_speaking = True
                     speech_frames.extend(pre_buf)
                     speech_frames.append(raw)
@@ -438,7 +502,7 @@ def _listen_vad_short(max_speech_s=2.0, wait_timeout_s=5.0):
             else:
                 speech_frames.append(raw)
                 total += 1
-                if conf < _VAD_SPEECH_THRESHOLD:
+                if conf < engine.vad_speech_threshold:
                     silence_chunks += 1
                     if silence_chunks >= silence_needed:
                         break
@@ -487,32 +551,24 @@ def _listen_vad_short(max_speech_s=2.0, wait_timeout_s=5.0):
 # Silero VAD (neural voice activity detection)
 # ===================================================================
 
-_vad_model = None
-_vad_lock = threading.Lock()
-_vad_failed = False
-
+# VAD constants (immutable)
 _VAD_SAMPLE_RATE = 16000
 _VAD_CHUNK_SAMPLES = 512  # 512 samples = 32ms at 16kHz
 _VAD_MAX_SPEECH_S = 10  # Max speech duration in seconds
 _VAD_PRE_SPEECH_CHUNKS = 8  # ~256ms of audio before speech start (avoids clipping)
 
-# Configurable sensitivity — overridden from config.json if present
-_VAD_SPEECH_THRESHOLD = 0.4  # Confidence threshold for speech detection
-_VAD_SILENCE_TIMEOUT_MS = 900  # Silence after speech to end capture
-_WAKE_WORD_FUZZY_THRESHOLD = 0.6  # SequenceMatcher ratio for fuzzy wake word matching
 
 def _load_speech_config():
     """Load tunable VAD/wake-word settings from config.json (if available)."""
-    global _VAD_SPEECH_THRESHOLD, _VAD_SILENCE_TIMEOUT_MS, _WAKE_WORD_FUZZY_THRESHOLD
     try:
         import json as _json
         _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
         if os.path.exists(_cfg_path):
             with open(_cfg_path, "r", encoding="utf-8") as _f:
                 _cfg = _json.load(_f)
-            _VAD_SPEECH_THRESHOLD = float(_cfg.get("vad_threshold", _VAD_SPEECH_THRESHOLD))
-            _VAD_SILENCE_TIMEOUT_MS = int(_cfg.get("vad_silence_ms", _VAD_SILENCE_TIMEOUT_MS))
-            _WAKE_WORD_FUZZY_THRESHOLD = float(_cfg.get("wake_word_threshold", _WAKE_WORD_FUZZY_THRESHOLD))
+            engine.vad_speech_threshold = float(_cfg.get("vad_threshold", engine.vad_speech_threshold))
+            engine.vad_silence_timeout_ms = int(_cfg.get("vad_silence_ms", engine.vad_silence_timeout_ms))
+            engine.wake_word_fuzzy_threshold = float(_cfg.get("wake_word_threshold", engine.wake_word_fuzzy_threshold))
     except Exception:
         pass  # Use defaults
 
@@ -521,31 +577,30 @@ _load_speech_config()
 
 def _get_vad_model():
     """Lazy-load the Silero VAD model."""
-    global _vad_model, _vad_failed
-    if _vad_model is not None:
-        return _vad_model
-    if _vad_failed:
+    if engine.vad_model is not None:
+        return engine.vad_model
+    if engine.vad_failed:
         return None
 
-    with _vad_lock:
-        if _vad_model is not None:
-            return _vad_model
-        if _vad_failed:
+    with engine.vad_lock:
+        if engine.vad_model is not None:
+            return engine.vad_model
+        if engine.vad_failed:
             return None
 
         try:
             import torch
             torch.set_num_threads(1)
             from silero_vad import load_silero_vad
-            _vad_model = load_silero_vad()
+            engine.vad_model = load_silero_vad()
             logging.info("Silero VAD model loaded successfully")
-            return _vad_model
+            return engine.vad_model
         except ImportError:
-            _vad_failed = True
+            engine.vad_failed = True
             logging.info("silero-vad not installed, using energy-based detection")
             return None
         except Exception as e:
-            _vad_failed = True
+            engine.vad_failed = True
             logging.error(f"Failed to load Silero VAD: {e}")
             return None
 
@@ -565,7 +620,7 @@ def _listen_with_vad():
     Returns path to temp WAV file containing speech, or None if no speech detected.
     """
     # Don't listen while system audio is playing
-    if _is_speaking.is_set() or _audio_playing.is_set():
+    if engine.is_speaking.is_set() or engine.audio_playing.is_set():
         return None
 
     vad = _get_vad_model()
@@ -605,7 +660,7 @@ def _listen_with_vad():
         speech_frames = []
         is_speaking = False
         silence_chunks = 0
-        silence_chunks_needed = int(_VAD_SILENCE_TIMEOUT_MS / 32)  # 32ms per chunk
+        silence_chunks_needed = int(engine.vad_silence_timeout_ms / 32)  # 32ms per chunk
         max_chunks = int(_VAD_MAX_SPEECH_S * _VAD_SAMPLE_RATE / _VAD_CHUNK_SAMPLES)
         total_chunks = 0
         # Timeout: ~5s of total silence before giving up (no speech at all)
@@ -644,7 +699,7 @@ def _listen_with_vad():
 
             if not is_speaking:
                 pre_speech_buffer.append(raw)
-                if confidence >= _VAD_SPEECH_THRESHOLD:
+                if confidence >= engine.vad_speech_threshold:
                     is_speaking = True
                     silence_chunks = 0
                     # Include pre-speech buffer to avoid clipping
@@ -661,7 +716,7 @@ def _listen_with_vad():
                 speech_frames.append(raw)
                 total_chunks += 1
 
-                if confidence < _VAD_SPEECH_THRESHOLD:
+                if confidence < engine.vad_speech_threshold:
                     silence_chunks += 1
                     if silence_chunks >= silence_chunks_needed:
                         logging.debug(f"VAD: speech end after {total_chunks * 32}ms")
@@ -715,32 +770,26 @@ def _listen_with_vad():
 # Language tracking
 # ===================================================================
 
-_detected_language = "en"  # Last detected language code (ISO 639-1)
-_language_lock = threading.Lock()
-_next_speak_language = None  # One-shot override: speak THIS response in this lang, then revert
-
 
 def get_detected_language():
     """Get the most recently detected language code (e.g. 'en', 'hi', 'ne')."""
-    with _language_lock:
-        return _detected_language
+    with engine.language_lock:
+        return engine.detected_language
 
 
 def set_language(lang_code):
     """Manually set the language (e.g. 'en', 'hi', 'ne')."""
-    global _detected_language
-    with _language_lock:
-        _detected_language = lang_code
+    with engine.language_lock:
+        engine.detected_language = lang_code
 
 
 def set_next_speak_language(lang_code):
     """Set a one-shot language override for the NEXT speak() call only.
-    After speaking, it reverts to _detected_language automatically.
+    After speaking, it reverts to detected_language automatically.
     Use when user says 'say X in Hindi' — the command is in English
     but the OUTPUT should be in Hindi, without permanently switching."""
-    global _next_speak_language
-    with _language_lock:
-        _next_speak_language = lang_code
+    with engine.language_lock:
+        engine.next_speak_language = lang_code
 
 
 # ===================================================================
@@ -773,11 +822,6 @@ def _is_noise(text):
 # ===================================================================
 # Whisper STT — WhisperX (4x faster) with faster-whisper fallback
 # ===================================================================
-
-_whisper_model = None
-_whisper_lock = threading.Lock()
-_whisper_failed = False  # Cache failure state to avoid 80K repeated warnings
-_whisper_backend = None  # "whisperx" or "faster_whisper"
 
 # Local model path (avoids slow HuggingFace cache on Windows)
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -818,16 +862,15 @@ def _ensure_local_model():
 
 def _get_whisper_model():
     """Lazy-load STT model. Tries WhisperX (4x faster) then faster-whisper."""
-    global _whisper_model, _whisper_failed, _whisper_backend
-    if _whisper_model is not None:
-        return _whisper_model
-    if _whisper_failed:
+    if engine.whisper_model is not None:
+        return engine.whisper_model
+    if engine.whisper_failed:
         return None
 
-    with _whisper_lock:
-        if _whisper_model is not None:
-            return _whisper_model
-        if _whisper_failed:
+    with engine.whisper_lock:
+        if engine.whisper_model is not None:
+            return engine.whisper_model
+        if engine.whisper_failed:
             return None
 
         # Detect CUDA
@@ -857,12 +900,12 @@ def _get_whisper_model():
 
             model_path = _ensure_local_model()
             logging.info(f"Loading faster-whisper from {model_path} on {device} ({compute_type})...")
-            _whisper_model = WhisperModel(
+            engine.whisper_model = WhisperModel(
                 model_path,
                 device=device,
                 compute_type=compute_type,
             )
-            _whisper_backend = "faster_whisper"
+            engine.whisper_backend = "faster_whisper"
             logging.info("faster-whisper model loaded successfully")
 
             if model_path == "base" and not os.path.isfile(
@@ -870,7 +913,7 @@ def _get_whisper_model():
             ):
                 _ensure_local_model()
 
-            return _whisper_model
+            return engine.whisper_model
 
         except ImportError:
             logging.info("faster-whisper not installed, trying WhisperX...")
@@ -881,18 +924,18 @@ def _get_whisper_model():
         try:
             import whisperx
             logging.info(f"Loading WhisperX model on {device} ({compute_type})...")
-            _whisper_model = whisperx.load_model(
+            engine.whisper_model = whisperx.load_model(
                 "base", device=device, compute_type=compute_type,
             )
-            _whisper_backend = "whisperx"
+            engine.whisper_backend = "whisperx"
             logging.info("WhisperX model loaded")
-            return _whisper_model
+            return engine.whisper_model
         except ImportError:
-            _whisper_failed = True
+            engine.whisper_failed = True
             logging.warning("Neither faster-whisper nor whisperx installed. Using Google STT fallback.")
             return None
         except Exception as e:
-            _whisper_failed = True
+            engine.whisper_failed = True
             logging.error(f"Failed to load Whisper model: {e}")
             return None
 
@@ -902,18 +945,16 @@ def _listen_whisper():
     Listen via microphone and transcribe with faster-whisper.
     Uses Silero VAD for speech detection when available, falls back to
     sr.Recognizer.listen() energy-based detection.
-    Returns text and updates _detected_language.
+    Returns text and updates detected_language.
     """
-    global _calibrated, _detected_language
-
     # Don't listen while system audio is playing (TTS, alarm, music)
-    if _is_speaking.is_set() or _audio_playing.is_set():
+    if engine.is_speaking.is_set() or engine.audio_playing.is_set():
         return None
 
     # Post-TTS cooldown
-    with _echo_lock:
-        _time_since_tts = time.time() - _speak_end_time
-    if _time_since_tts < _POST_TTS_COOLDOWN_S:
+    with engine.echo_lock:
+        _time_since_tts = time.time() - engine.speak_end_time
+    if _time_since_tts < engine.post_tts_cooldown_s:
         return None
 
     model = _get_whisper_model()
@@ -928,19 +969,19 @@ def _listen_whisper():
 
         if tmp_path is not None:
             used_silero_vad = True
-        elif not _vad_failed:
+        elif not engine.vad_failed:
             # VAD is available but detected no speech — return None to retry
             return None
         else:
             # VAD unavailable — fall back to energy-based detection
             try:
                 with sr.Microphone() as source:
-                    if not _calibrated:
+                    if not engine.calibrated:
                         print("Calibrating microphone...")
                         _recognizer.adjust_for_ambient_noise(source, duration=0.3)
-                        _calibrated = True
+                        engine.calibrated = True
 
-                    if not _vad_failed:
+                    if not engine.vad_failed:
                         # VAD returned None = no speech, don't re-print "Listening..."
                         pass
                     else:
@@ -976,7 +1017,7 @@ def _listen_whisper():
             detected_lang = None
             lang_prob = 0.0
 
-            if _whisper_backend == "whisperx":
+            if engine.whisper_backend == "whisperx":
                 # WhisperX: batched inference (4x faster)
                 import whisperx
                 audio = whisperx.load_audio(tmp_path)
@@ -1033,9 +1074,9 @@ def _listen_whisper():
                         text = None
 
             # Echo detection: if transcription is >80% similar to last spoken text, discard
-            with _echo_lock:
-                _echo_text = _last_spoken_text
-                _echo_time = _speak_end_time
+            with engine.echo_lock:
+                _echo_text = engine.last_spoken_text
+                _echo_time = engine.speak_end_time
             if text and _echo_text and time.time() - _echo_time < 3.0:
                 from difflib import SequenceMatcher
                 similarity = SequenceMatcher(None, text.lower(), _echo_text.lower()).ratio()
@@ -1054,8 +1095,8 @@ def _listen_whisper():
                 prob = lang_prob
                 if detected:
                     word_count = len(text.split())
-                    with _language_lock:
-                        prev_lang = _detected_language
+                    with engine.language_lock:
+                        prev_lang = engine.detected_language
 
                     # Only accept languages the user actually speaks
                     # Whisper often misdetects English as Russian, Chinese, etc.
@@ -1073,13 +1114,13 @@ def _listen_whisper():
                         logging.info(f"Whisper short utterance override: {detected} → en (only {word_count} words)")
                         detected = "en"
 
-                    with _language_lock:
-                        _detected_language = detected
+                    with engine.language_lock:
+                        engine.detected_language = detected
                     _raw_lang = info.language if 'info' in dir() else detected_lang
                     logging.info(f"Whisper language: {detected} (raw: {_raw_lang}, prob: {prob:.2f})")
 
-                with _language_lock:
-                    _print_lang = _detected_language
+                with engine.language_lock:
+                    _print_lang = engine.detected_language
                 print(f"You [{_print_lang}]: {text}")
                 return text
             else:
@@ -1109,20 +1150,19 @@ def _listen_whisper():
 
 def _listen_google():
     """Listen for voice input via microphone using Google STT. Fallback engine."""
-    global _calibrated
     try:
         with sr.Microphone() as source:
-            if not _calibrated:
+            if not engine.calibrated:
                 print("Calibrating microphone...")
                 _recognizer.adjust_for_ambient_noise(source, duration=0.3)
-                _calibrated = True
+                engine.calibrated = True
 
             print("Listening...")
             audio = _recognizer.listen(source, timeout=3, phrase_time_limit=8)
 
             # Use detected language for Google STT if non-English
-            with _language_lock:
-                lang = _detected_language
+            with engine.language_lock:
+                lang = engine.detected_language
             google_lang = lang if lang in ("hi", "ne") else "en"
             # Google uses locale codes like "hi-IN", "ne-NP"
             lang_map = {"hi": "hi-IN", "ne": "ne-NP", "en": "en-US"}
@@ -1159,23 +1199,18 @@ def _listen_google():
 # TTS — multilingual (pyttsx3 for English, gTTS for Hindi/Nepali/other)
 # ===================================================================
 
-_pygame_initialized = False
-_pygame_lock = threading.Lock()
-
-
 def _init_pygame():
     """Lazy-init pygame mixer for mp3 playback."""
-    global _pygame_initialized
-    if _pygame_initialized:
+    if engine.pygame_initialized:
         return True
 
-    with _pygame_lock:
-        if _pygame_initialized:
+    with engine.pygame_lock:
+        if engine.pygame_initialized:
             return True
         try:
             import pygame
             pygame.mixer.init()
-            _pygame_initialized = True
+            engine.pygame_initialized = True
             return True
         except Exception as e:
             logging.error(f"pygame mixer init failed: {e}")
@@ -1184,26 +1219,25 @@ def _init_pygame():
 
 def _speak_pyttsx3(text):
     """Speak with pyttsx3 (English, fast, offline). Interruptible between sentences."""
-    global _engine
     import re as _re
     sentences = _re.split(r'(?<=[.!?])\s+', text)
     if not sentences:
         sentences = [text]
-    with _tts_lock:
+    with engine.tts_lock:
         for sentence in sentences:
-            if _stop_speaking.is_set():
-                _stop_speaking.clear()
+            if engine.stop_speaking.is_set():
+                engine.stop_speaking.clear()
                 break
             if not sentence.strip():
                 continue
             try:
-                _engine.say(sentence)
-                _engine.runAndWait()
+                engine.tts_engine.say(sentence)
+                engine.tts_engine.runAndWait()
             except RuntimeError:
                 try:
-                    _engine = pyttsx3.init()
-                    _engine.say(sentence)
-                    _engine.runAndWait()
+                    engine.tts_engine = pyttsx3.init()
+                    engine.tts_engine.say(sentence)
+                    engine.tts_engine.runAndWait()
                 except Exception as e:
                     logging.error(f"TTS error after re-init: {e}")
                     print(f"[TTS Error] {sentence}")
@@ -1215,10 +1249,6 @@ def _speak_pyttsx3(text):
 # ===================================================================
 # Piper TTS (neural, natural-sounding English voice)
 # ===================================================================
-
-_piper_voice = None
-_piper_lock = threading.Lock()
-_piper_failed = False
 
 _PIPER_MODEL_DIR = os.path.join(_PROJECT_DIR, "models", "piper")
 _PIPER_MODEL_NAME = "en_US-lessac-medium"
@@ -1263,41 +1293,40 @@ def _ensure_piper_model():
 
 def _get_piper_voice():
     """Lazy-load the Piper TTS voice."""
-    global _piper_voice, _piper_failed
-    if _piper_voice is not None:
-        return _piper_voice
-    if _piper_failed:
+    if engine.piper_voice is not None:
+        return engine.piper_voice
+    if engine.piper_failed:
         return None
 
-    with _piper_lock:
-        if _piper_voice is not None:
-            return _piper_voice
-        if _piper_failed:
+    with engine.piper_lock:
+        if engine.piper_voice is not None:
+            return engine.piper_voice
+        if engine.piper_failed:
             return None
 
         try:
             from piper.voice import PiperVoice
         except ImportError:
-            _piper_failed = True
+            engine.piper_failed = True
             logging.info("piper-tts not installed, using pyttsx3 for English TTS")
             return None
 
         if not _ensure_piper_model():
-            _piper_failed = True
+            engine.piper_failed = True
             return None
 
         try:
-            _piper_voice = PiperVoice.load(_PIPER_ONNX_PATH)
+            engine.piper_voice = PiperVoice.load(_PIPER_ONNX_PATH)
             logging.info("Piper TTS voice loaded successfully")
-            return _piper_voice
+            return engine.piper_voice
         except Exception as e:
-            _piper_failed = True
+            engine.piper_failed = True
             logging.error(f"Failed to load Piper voice: {e}")
             return None
 
 
 def _play_wav_data(wav_bytes, sample_rate):
-    """Play raw PCM int16 audio bytes. Interruptible via _stop_speaking."""
+    """Play raw PCM int16 audio bytes. Interruptible via engine.stop_speaking."""
     tmp_path = None
     try:
         # Write to temp WAV file
@@ -1322,9 +1351,9 @@ def _play_wav_data(wav_bytes, sample_rate):
             pygame.mixer.music.load(tmp_path)
             pygame.mixer.music.play()
             while pygame.mixer.music.get_busy():
-                if _stop_speaking.is_set():
+                if engine.stop_speaking.is_set():
                     pygame.mixer.music.stop()
-                    _stop_speaking.clear()
+                    engine.stop_speaking.clear()
                     break
                 pygame.time.wait(50)
         else:
@@ -1352,9 +1381,9 @@ def _play_wav_fallback(wav_path):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         while proc.poll() is None:
-            if _stop_speaking.is_set():
+            if engine.stop_speaking.is_set():
                 proc.terminate()
-                _stop_speaking.clear()
+                engine.stop_speaking.clear()
                 break
             time.sleep(0.1)
     except Exception as e:
@@ -1369,11 +1398,11 @@ def _speak_piper(text):
         return
 
     try:
-        with _tts_lock:
+        with engine.tts_lock:
             # Piper's synthesize() yields AudioChunk per sentence automatically
             for audio_chunk in voice.synthesize(text):
-                if _stop_speaking.is_set():
-                    _stop_speaking.clear()
+                if engine.stop_speaking.is_set():
+                    engine.stop_speaking.clear()
                     break
 
                 pcm_data = audio_chunk.audio_int16_bytes
@@ -1406,9 +1435,9 @@ def _play_mp3_fallback(mp3_path):
         )
         # Wait with interruptibility
         while proc.poll() is None:
-            if _stop_speaking.is_set():
+            if engine.stop_speaking.is_set():
                 proc.terminate()
-                _stop_speaking.clear()
+                engine.stop_speaking.clear()
                 break
             time.sleep(0.1)
         return True
@@ -1461,18 +1490,18 @@ def _speak_gtts(text, lang):
         if _has_pygame:
             # Play with pygame (preferred — interruptible)
             import pygame
-            with _tts_lock:
+            with engine.tts_lock:
                 pygame.mixer.music.load(tmp_path)
                 pygame.mixer.music.play()
                 while pygame.mixer.music.get_busy():
-                    if _stop_speaking.is_set():
+                    if engine.stop_speaking.is_set():
                         pygame.mixer.music.stop()
-                        _stop_speaking.clear()
+                        engine.stop_speaking.clear()
                         break
                     pygame.time.wait(50)
         else:
             # Fallback: play with Windows PowerShell MediaPlayer
-            with _tts_lock:
+            with engine.tts_lock:
                 _play_mp3_fallback(tmp_path)
 
     except Exception as e:
@@ -1527,16 +1556,15 @@ def speak(text):
     Also auto-detects non-Latin scripts in the output text so LLM responses
     in Hindi/Nepali are spoken correctly even when user spoke in English.
     """
-    global _next_speak_language, _last_spoken_text, _speak_end_time
     set_mic_state("SPEAKING")
-    _is_speaking.set()
-    with _echo_lock:
-        _last_spoken_text = text[:200] if text else ""  # Record for echo detection
+    engine.is_speaking.set()
+    with engine.echo_lock:
+        engine.last_spoken_text = text[:200] if text else ""  # Record for echo detection
     try:
         # One-shot override takes priority, then falls back to detected language
-        with _language_lock:
-            lang = _next_speak_language or _detected_language
-            _next_speak_language = None  # Clear after use — one-shot only
+        with engine.language_lock:
+            lang = engine.next_speak_language or engine.detected_language
+            engine.next_speak_language = None  # Clear after use — one-shot only
 
         # Auto-detect: if response contains non-Latin script, override language
         script_lang = _detect_script_language(text)
@@ -1549,12 +1577,12 @@ def speak(text):
         else:
             _speak_gtts(text, lang)
     finally:
-        _is_speaking.clear()
-        with _echo_lock:
-            _speak_end_time = time.time()  # Silence buffer: track when TTS finished
+        engine.is_speaking.clear()
+        with engine.echo_lock:
+            engine.speak_end_time = time.time()  # Silence buffer: track when TTS finished
         # Post-TTS cooldown — prevents mic picking up tail-end of TTS
         # Also prevents "Say Hey G to wake me" from triggering false wake
-        time.sleep(_POST_TTS_COOLDOWN_S)
+        time.sleep(engine.post_tts_cooldown_s)
         set_mic_state("IDLE")
 
 
@@ -1577,25 +1605,24 @@ def speak_stream(sentence_gen, lang: str = "en"):
     Returns:
         str or None: Barge-in text if user interrupted, else None.
     """
-    global _last_spoken_text, _speak_end_time
     set_mic_state("SPEAKING")
-    _is_speaking.set()
+    engine.is_speaking.set()
 
     # Auto-detect language override from detected STT language
-    with _language_lock:
-        effective_lang = lang if lang != "auto" else (_detected_language or "en")
+    with engine.language_lock:
+        effective_lang = lang if lang != "auto" else (engine.detected_language or "en")
 
     interrupted = None
     try:
         for sentence in sentence_gen:
             if not sentence.strip():
                 continue
-            if _stop_speaking.is_set():
-                _stop_speaking.clear()
+            if engine.stop_speaking.is_set():
+                engine.stop_speaking.clear()
                 break
 
-            with _echo_lock:
-                _last_spoken_text = sentence[:200]
+            with engine.echo_lock:
+                engine.last_spoken_text = sentence[:200]
 
             # Route to appropriate TTS engine per sentence
             if effective_lang == "en":
@@ -1604,8 +1631,8 @@ def speak_stream(sentence_gen, lang: str = "en"):
                 _speak_gtts(sentence, effective_lang)
 
             # Check for barge-in after each sentence (non-blocking peek)
-            if _stop_speaking.is_set():
-                _stop_speaking.clear()
+            if engine.stop_speaking.is_set():
+                engine.stop_speaking.clear()
                 break
 
             # Lightweight barge-in check between sentences using existing VAD
@@ -1617,10 +1644,10 @@ def speak_stream(sentence_gen, lang: str = "en"):
             except Exception:
                 pass
     finally:
-        _is_speaking.clear()
-        with _echo_lock:
-            _speak_end_time = time.time()
-        time.sleep(_POST_TTS_COOLDOWN_S)
+        engine.is_speaking.clear()
+        with engine.echo_lock:
+            engine.speak_end_time = time.time()
+        time.sleep(engine.post_tts_cooldown_s)
         set_mic_state("IDLE")
 
     return interrupted
@@ -1628,11 +1655,11 @@ def speak_stream(sentence_gen, lang: str = "en"):
 
 def stop_speaking():
     """Immediately stop any ongoing speech. Called on barge-in."""
-    _stop_speaking.set()
+    engine.stop_speaking.set()
     # Stop pyttsx3 SAPI engine if it's active (fallback TTS)
     try:
-        if _engine is not None:
-            _engine.stop()
+        if engine.tts_engine is not None:
+            engine.tts_engine.stop()
     except Exception:
         pass
 
@@ -1646,7 +1673,7 @@ def speak_interruptible(text):
     with pyttsx3 on Windows. Adds a small delay between checks to prevent
     tight-loop resource contention.
     """
-    _stop_speaking.clear()
+    engine.stop_speaking.clear()
     speak_thread = threading.Thread(target=speak, args=(text,), daemon=True)
     speak_thread.start()
 
@@ -1743,19 +1770,14 @@ def _listen_text():
 # Main listen() — unified entry point
 # ===================================================================
 
-# STT engine: "whisper" or "google" (set from config or env)
-_stt_engine = os.environ.get("G_STT_ENGINE", "whisper").lower()
-
-
-def set_stt_engine(engine):
+def set_stt_engine(stt_name):
     """Set the STT engine: 'whisper' or 'google'."""
-    global _stt_engine
-    _stt_engine = engine.lower()
+    engine.stt_engine = stt_name.lower()
 
 
 def _listen_voice():
     """Listen for voice input using the configured STT engine."""
-    if _stt_engine == "whisper":
+    if engine.stt_engine == "whisper":
         return _listen_whisper()
     else:
         return _listen_google()

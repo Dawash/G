@@ -235,7 +235,7 @@ class TestSpeakStream(unittest.TestCase):
         # Patch the internal Piper call
         with patch('speech._speak_piper', side_effect=mock_piper), \
              patch('speech.set_mic_state'), \
-             patch('speech._is_speaking', MagicMock()):
+             patch.object(__import__('speech').engine, 'is_speaking', MagicMock()):
             sentences = iter(["Hello there.", "How are you?", "I am fine."])
             speak_stream(sentences)
 
@@ -247,7 +247,7 @@ class TestSpeakStream(unittest.TestCase):
         from speech import speak_stream
         with patch('speech._speak_piper'), \
              patch('speech.set_mic_state'), \
-             patch('speech._is_speaking', MagicMock()):
+             patch.object(__import__('speech').engine, 'is_speaking', MagicMock()):
             result = speak_stream(iter([]))  # Should not raise
             # result is None or str
 
