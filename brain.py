@@ -561,148 +561,15 @@ def _log_learning(user_input, tool_name, arguments, result):
 
 
 # ===================================================================
-# Error Recovery UX — convert raw errors to friendly spoken messages
+# Error Recovery UX — extracted to llm/response_sanitizer.py
+# Re-exported here for backward compatibility
 # ===================================================================
-
-# Pattern-based error classification for friendly messages.
-# Each entry: (pattern_substring, category_key)
-_ERROR_PATTERNS = [
-    # App not found — suggest similar apps
-    ("not found", "app_not_found"),
-    ("not installed", "app_not_found"),
-    ("no such", "app_not_found"),
-    # Timeout errors
-    ("timed out", "timeout"),
-    ("timeout", "timeout"),
-    ("took too long", "timeout"),
-    # Network / connection errors
-    ("connection error", "network"),
-    ("network error", "network"),
-    ("connectionerror", "network"),
-    ("cannot connect", "network"),
-    ("couldn't connect", "network"),
-    ("unable to connect", "network"),
-    ("no internet", "network"),
-    # Permission errors
-    ("permission denied", "permission"),
-    ("access denied", "permission"),
-    ("blocked for safety", "safety"),
-    ("blocked:", "safety"),
-    # Music/media playback
-    ("couldn't play", "playback"),
-    ("couldn't auto-play", "playback"),
-    ("playback failed", "playback"),
-    ("no results", "no_results"),
-    # Agent/automation failures
-    ("agent task failed", "agent_fail"),
-    ("agent_task timed out", "timeout"),
-    ("task took too long", "timeout"),
-    # Generic tool errors
-    ("error executing", "generic_tool"),
-    ("unknown tool", "unknown_tool"),
-]
-
-_FRIENDLY_MESSAGES = {
-    "app_not_found": "I couldn't find that app on your system. Would you like me to search for something similar?",
-    "timeout": "That's taking too long. Want me to try a different approach?",
-    "network": "I'm having trouble connecting to the internet. Let me try again in a moment.",
-    "permission": "I don't have permission to do that. You may need to run it manually.",
-    "safety": "That action is blocked for safety. I can help you do it a different way if you'd like.",
-    "playback": "I had trouble with playback. Would you like me to try a different app or method?",
-    "no_results": "I couldn't find any results for that. Try rephrasing or being more specific.",
-    "agent_fail": "I wasn't able to complete that task automatically. Want me to try a simpler approach?",
-    "generic_tool": "Something went wrong with that action. Let me try a different way.",
-    "unknown_tool": "I don't have a tool for that. Let me try to handle it differently.",
-}
-
-
-def _friendly_error(error_text, user_input="", tool_name=""):
-    """Convert raw error messages to natural, helpful spoken messages.
-
-    Args:
-        error_text: The raw error string from tool execution.
-        user_input: The original user request (for context).
-        tool_name: The tool that failed (for context).
-
-    Returns:
-        A friendly, speakable error message with suggestions when possible.
-        Returns the original text unchanged if it is not an error.
-    """
-    if not error_text:
-        return error_text
-
-    error_lower = str(error_text).lower()
-
-    # Check if this is actually an error (not all results with these words are errors)
-    _not_errors = ["opened", "completed", "success", "done", "playing", "started"]
-    if any(w in error_lower for w in _not_errors) and not any(
-        w in error_lower for w in ["error", "failed", "couldn't", "timed out"]
-    ):
-        return error_text  # Not actually an error — return as-is
-
-    # Match against known error patterns
-    matched_category = None
-    for pattern, category in _ERROR_PATTERNS:
-        if pattern in error_lower:
-            matched_category = category
-            break
-
-    if not matched_category:
-        # No pattern matched — check if it even looks like an error
-        if not any(w in error_lower for w in [
-            "error", "failed", "couldn't", "timed out", "timeout",
-            "blocked", "denied", "not found", "unable",
-        ]):
-            return error_text  # Not an error — return unchanged
-        # Generic fallback for unrecognized errors
-        matched_category = "generic_tool"
-
-    friendly = _FRIENDLY_MESSAGES.get(matched_category, error_text)
-
-    # App-not-found: try to suggest similar apps (skip for open_app which
-    # already has its own suggestion logic in execute_tool)
-    if matched_category == "app_not_found" and tool_name != "open_app":
-        _app_match = re.search(r"(?:find|open|launch|start)\s+(.+?)(?:\.|$)", user_input, re.I)
-        if _app_match:
-            app_name = _app_match.group(1).strip()
-            try:
-                from app_finder import find_similar_apps
-                alts = find_similar_apps(app_name, limit=3)
-                if alts:
-                    friendly = f"I couldn't find {app_name}. Did you mean: {', '.join(alts)}?"
-            except Exception:
-                pass
-
-    # Playback errors: suggest alternative app
-    if matched_category == "playback":
-        if "spotify" in error_lower or "spotify" in user_input.lower():
-            friendly = "I couldn't start playing on Spotify. Would you like me to try YouTube instead?"
-        elif "youtube" in error_lower or "youtube" in user_input.lower():
-            friendly = "I had trouble playing on YouTube. Would you like me to try Spotify instead?"
-
-    # Log the conversion for debugging
-    logger.debug(f"Friendly error: '{str(error_text)[:80]}' -> category={matched_category}")
-    return friendly
-
-
-def _is_error_result(result):
-    """Check if a tool result string represents an error that needs wrapping.
-
-    Returns False for results that already contain user-friendly messages
-    (e.g., "I couldn't find a location called 'xyz'. Try...")
-    """
-    if not result:
-        return False
-    lower = str(result).lower()
-    # Already user-friendly — contains advice like "try", "did you mean", "make sure"
-    if any(w in lower for w in ["try ", "did you mean", "make sure", "would you like"]):
-        return False
-    return any(w in lower for w in [
-        "error", "failed", "not found", "couldn't", "timed out",
-        "timeout", "blocked", "denied", "unable", "could not",
-    ]) and not any(w in lower for w in [
-        "opened", "completed", "success", "done", "playing", "started",
-    ])
+from llm.response_sanitizer import (
+    ERROR_PATTERNS as _ERROR_PATTERNS,
+    FRIENDLY_MESSAGES as _FRIENDLY_MESSAGES,
+    friendly_error as _friendly_error,
+    is_error_result as _is_error_result,
+)
 
 
 def execute_tool(tool_name, arguments, action_registry, reminder_mgr=None, speak_fn=None):
@@ -1593,37 +1460,17 @@ class Brain:
     def _check_skill_library(self, user_input):
         """Check if a stored skill matches the user's request (Voyager pattern).
 
-        Returns the skill's step descriptions if found, None otherwise.
-        Also checks required credentials before returning a match.
+        Returns the skill dict if found, None otherwise.
+        Delegates to llm.skill_matcher.check_skill_match().
         """
         self._ensure_skill_lib()
         if not self._skill_lib:
             return None
-
         try:
-            matches = self._skill_lib.find_skill(user_input, min_similarity=0.7, limit=1)
-            if matches:
-                match = matches[0]
-                # Skip low-quality skills — they contain vague/incomplete sequences
-                q = match.get("quality_score", 0)
-                if q > 0 and q < 50:
-                    logger.info(f"Skill {match['name']} skipped — quality too low ({q})")
-                    return None
-                logger.info(f"Skill library match: {match['name']} "
-                            f"(similarity={match['similarity']:.2f}, "
-                            f"used {match['success_count']}x, q={q})")
-
-                # Check if required credentials are available
-                ok, missing = self._skill_lib.check_credentials(match["name"])
-                if not ok:
-                    logger.info(f"Skill {match['name']} skipped — "
-                                f"missing credentials: {missing}")
-                    return None  # Fall through to LLM
-
-                return match
-        except Exception as e:
-            logger.debug(f"Skill library lookup failed: {e}")
-        return None
+            from llm.skill_matcher import check_skill_match
+            return check_skill_match(self._skill_lib, user_input)
+        except Exception:
+            return None
 
     # Cached responses for frequently asked questions + greetings
     # These bypass the LLM entirely — instant response (0ms)
@@ -2554,20 +2401,26 @@ class Brain:
         return self._key_dead
 
     def think(self, user_input, detected_language=None):
-        """
-        Process user input through the LLM brain.
+        """Process user input through the full Brain pipeline.
 
-        The LLM decides whether to:
-        - Respond with text (simple conversation)
-        - Call tools (system actions)
-        - Chain multiple tools for complex tasks
+        Flow:
+            1. Pre-process: validate, detect language, resolve nicknames
+            2. Fast paths: plugins, JARVIS, rate-limit/dead-key guards
+            3. Direct dispatch: pattern-matched tool routing (no LLM)
+            4. Skill check: replay stored tool sequence if match found
+            5. Context: inject awareness state, memory, cognitive context
+            6. LLM call: send to model with tools, handle tool loop
+            7. Agent escalation: partial/UI failures -> desktop agent
+            8. Post-process: sanitize, save skill, learn, trace
 
-        Returns the final spoken response string, or None on failure.
-        None means the caller should use keyword fallback.
+        Returns:
+            str: Response text, or None on failure.
         """
         from ai_providers import is_rate_limited, _record_rate_limit, _clear_rate_limit
 
         _think_t0 = time.time()
+
+        # ━━━ PHASE 1: Pre-process — validate input, reset state ━━━
 
         # Reset cancellation flag at start of each think() call
         self._cancelled = False
@@ -2581,8 +2434,9 @@ class Brain:
         if not user_input or not user_input.strip():
             return None
 
-        # --- NICKNAME RESOLUTION (Phase 10) ---
-        # Replace learned nicknames: "open my browser" → "open firefox"
+        # ━━━ PHASE 2: Fast paths — plugins, JARVIS, guards ━━━
+
+        # Nickname resolution: "open my browser" → "open firefox"
         if self.user_preferences:
             try:
                 resolved_input = self.user_preferences.resolve_nickname(user_input)
@@ -2650,14 +2504,14 @@ class Brain:
         if is_rate_limited():
             return None  # Let caller fall back to keyword mode
 
-        # --- DIRECT MODE (no LLM needed) ---
+        # ━━━ PHASE 3: Direct dispatch — pattern-matched tool routing (no LLM) ━━━
         # Pattern-match system queries (RAM, disk, CPU) for instant execution
         # This MUST come before skill library to avoid replaying broken stored skills
         direct_result = self._try_direct_dispatch(user_input)
         if direct_result:
             return direct_result
 
-        # --- SKILL LIBRARY CHECK (Voyager pattern) ---
+        # ━━━ PHASE 4: Skill check — replay stored tool sequence if match found ━━━
         # Before full LLM processing, check if we have a stored skill
         skill_match = self._check_skill_library(user_input)
         if skill_match and skill_match.get("similarity", 0) >= 0.70:
@@ -2750,10 +2604,10 @@ class Brain:
                     self._skill_lib.record_use(skill_match["name"], success=False)
                 # Fall through to normal processing
 
+        # ━━━ PHASE 5: Context — inject awareness, memory, cognitive state ━━━
         # LLM-FIRST ARCHITECTURE: No mode classification.
         # The LLM sees all tools (including agent_task, web_search_answer)
-        # and decides the right action itself. This eliminates routing bugs
-        # from regex-based classification and handles natural speech perfectly.
+        # and decides the right action itself.
         # Lazy-load cognitive engine on first think() call
         self._ensure_cognition()
 
@@ -2871,11 +2725,9 @@ class Brain:
         # handles compound requests via regex (0ms) instead of LLM (6.5s).
         # See: llm/mode_classifier.py SMART DECOMPOSITION section.
 
+        # ━━━ PHASE 6: LLM call — send to model with tools, handle tool loop ━━━
+
         # Collapse previous turn's tool messages BEFORE trimming.
-        # Old order was: trim → LLM → collapse(after LLM).
-        # Problem: the LLM was seeing the uncollapsed tool messages from the
-        # previous turn in its context window, filling it with raw [Tool: ...]
-        # outputs instead of clean conversation history.
         # New order: collapse previous turn → trim → LLM call.
         self._collapse_completed_turn(None)   # collapse last turn if not yet done
         self.messages.append({"role": "user", "content": user_input})
@@ -2923,8 +2775,9 @@ class Brain:
             else:
                 result = self._think_prompt_based()
 
-            # Smart escalation: escalate to agent mode when quick mode can't
-            # fully complete a task. Two cases:
+            # ━━━ PHASE 7: Agent escalation — partial/UI failures -> desktop agent ━━━
+            # Escalate to agent mode when quick mode can't fully complete a task.
+            # Two cases:
             # 1. UI-related errors needing screen interaction
             # 2. Partial completion (action started but not confirmed/finished)
             result_lower = str(result).lower() if result else ""
@@ -2977,6 +2830,8 @@ class Brain:
                         result = agent_result
                 except Exception as e:
                     logger.warning(f"Agent escalation failed: {e}")
+
+            # ━━━ PHASE 8: Post-process — sanitize, save skill, learn, trace ━━━
 
             if result:
                 _clear_rate_limit()
