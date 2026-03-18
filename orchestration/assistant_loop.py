@@ -59,6 +59,7 @@ from core.control_flags import (
 )
 from core.state import RuntimeState
 from core.event_bus import bus
+from core.timeouts import Timeouts
 from core.topics import Topics
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,7 @@ def _debug_trace(msg):
                 os.replace(trace_path, trace_path + ".old")
         except OSError:
             pass
-        with open(trace_path, "a") as f:
+        with open(trace_path, "a", encoding="utf-8") as f:
             f.write(f"{time.strftime('%H:%M:%S', time.localtime())}: {msg}\n")
             f.flush()
     except Exception:
@@ -266,7 +267,7 @@ def _start_ollama_keepalive(ollama_model, ollama_url=None):
         while not _keepalive_stop.is_set():
             # Wait 240 seconds, but check stop event every 10s for fast shutdown
             for _ in range(24):
-                if _keepalive_stop.wait(timeout=10):
+                if _keepalive_stop.wait(timeout=Timeouts.OLLAMA_KEEPALIVE_PING):
                     return
             try:
                 _requests.post(
@@ -276,7 +277,7 @@ def _start_ollama_keepalive(ollama_model, ollama_url=None):
                         "prompt": "hi",
                         "options": {"num_predict": 1},
                     },
-                    timeout=10,
+                    timeout=Timeouts.OLLAMA_KEEPALIVE_PING,
                 )
                 logger.debug(f"Ollama keepalive: pinged {ollama_model}")
             except Exception as e:
@@ -316,6 +317,10 @@ def run(runtime_state=None):
     ollama_model = config.get("ollama_model", DEFAULT_OLLAMA_MODEL)
     ollama_url = config.get("ollama_url", DEFAULT_OLLAMA_URL)
     cloud_model = config.get("cloud_model")
+
+    # Load timeout overrides from config
+    Timeouts.load_overrides(config)
+
     system_prompt = get_system_prompt(uname, ainame)
     provider = create_provider(provider_name, api_key, system_prompt,
                                ollama_model=ollama_model, ollama_url=ollama_url,
@@ -700,8 +705,8 @@ def run(runtime_state=None):
         user_input = correct_speech(user_input)
         bus.publish(Topics.INPUT_RECEIVED, {"text": user_input}, source="assistant_loop")
 
-        # Auto-save session every 60 seconds
-        if time.time() - _last_session_save > 60:
+        # Auto-save session periodically
+        if time.time() - _last_session_save > Timeouts.SESSION_AUTOSAVE:
             try:
                 _ss.last_user_input = user_input
                 _session_persistence.save(brain, _ss)
@@ -1009,13 +1014,13 @@ def run(runtime_state=None):
             _model_name = getattr(brain, 'ollama_model', '') or ''
             _model_lower = _model_name.lower()
             if any(s in _model_lower for s in ("72b", "70b")):
-                _base_timeout = 300
+                _base_timeout = Timeouts.BRAIN_THINK_72B
             elif any(s in _model_lower for s in ("32b", "34b", "27b")):
-                _base_timeout = 180
+                _base_timeout = Timeouts.BRAIN_THINK_32B
             elif any(s in _model_lower for s in ("14b", "13b")):
-                _base_timeout = 90
+                _base_timeout = Timeouts.BRAIN_THINK_14B
             else:
-                _base_timeout = 60
+                _base_timeout = Timeouts.BRAIN_THINK_7B
             # Complex tasks get 50% more time (create, book, agent-level commands)
             _ui_lower = user_input.lower()
             _is_complex = any(w in _ui_lower for w in [
@@ -1023,9 +1028,9 @@ def run(runtime_state=None):
                 "book", "order", "search and", "and then",
                 "agent", "automate",
             ])
-            _BRAIN_TIMEOUT = int(_base_timeout * 1.5) if _is_complex else _base_timeout
+            _BRAIN_TIMEOUT = int(_base_timeout * Timeouts.BRAIN_THINK_COMPLEX) if _is_complex else _base_timeout
             # Dynamic acknowledgment: longer delay for simple queries (likely fast), shorter for complex
-            _ack_delay = 4.0 if len(user_input.split()) <= 5 else 2.5
+            _ack_delay = Timeouts.BRAIN_ACKNOWLEDGMENT + 1.0 if len(user_input.split()) <= 5 else Timeouts.BRAIN_ACKNOWLEDGMENT - 0.5
             import random as _rnd
             _ack_phrases = [
                 "Working on it...", "Let me handle that...", "On it...",

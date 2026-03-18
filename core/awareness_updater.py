@@ -17,6 +17,7 @@ from typing import Tuple
 
 from core.awareness_state import awareness
 from core.event_bus import bus
+from core.timeouts import Timeouts
 from core.topics import Topics
 
 
@@ -117,7 +118,7 @@ def _time_updater() -> None:
             _update_time_now()
         except Exception:
             pass
-        time.sleep(30)
+        time.sleep(Timeouts.AWARENESS_TIME_POLL)
 
 
 def _window_tracker() -> None:
@@ -136,7 +137,7 @@ def _window_tracker() -> None:
             awareness.update(**updates)
         except Exception:
             pass
-        time.sleep(3)
+        time.sleep(Timeouts.AWARENESS_WINDOW_POLL)
 
 
 def _system_monitor() -> None:
@@ -148,7 +149,7 @@ def _system_monitor() -> None:
                 awareness.update(**stats)
         except Exception:
             pass
-        time.sleep(10)
+        time.sleep(Timeouts.AWARENESS_SYSTEM_POLL)
 
 
 def _interaction_timer() -> None:
@@ -174,7 +175,7 @@ def _clipboard_monitor() -> None:
                 awareness.update(clipboard_preview=clip[:200])
         except Exception:
             pass
-        time.sleep(5)
+        time.sleep(Timeouts.AWARENESS_CLIPBOARD_POLL)
 
 
 def _awareness_publisher() -> None:
@@ -184,7 +185,7 @@ def _awareness_publisher() -> None:
             bus.publish(Topics.CONTEXT_UPDATE, awareness.snapshot(), source="awareness_updater")
         except Exception:
             pass
-        time.sleep(5)
+        time.sleep(Timeouts.AWARENESS_CLIPBOARD_POLL)
 
 
 # ---------------------------------------------------------------------------

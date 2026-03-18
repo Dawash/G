@@ -24,6 +24,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from core.timeouts import Timeouts
+
 logger = logging.getLogger(__name__)
 
 
@@ -83,7 +85,7 @@ class BaseTrigger:
 
     id: str = "base"
     category: str = "info"
-    cooldown_seconds: int = 300
+    cooldown_seconds: int = Timeouts.PROACTIVE_MIN_INTERVAL
     base_urgency: int = 50
 
     def __init__(self) -> None:
@@ -218,8 +220,8 @@ class ProactiveEngine:
     is delivered per evaluation cycle to prevent suggestion storms.
     """
 
-    _EVAL_INTERVAL: int = 10   # seconds between evaluation cycles
-    _STARTUP_DELAY: int = 30   # seconds to wait after start() before first eval
+    _EVAL_INTERVAL: int = Timeouts.PROACTIVE_EVAL_INTERVAL
+    _STARTUP_DELAY: int = Timeouts.PROACTIVE_STARTUP_DELAY
     _MAX_PENDING: int = 3      # max queued speak_at_pause suggestions
     _MAX_HISTORY: int = 50     # max entries in suggestion_history
 
@@ -314,7 +316,7 @@ class ProactiveEngine:
                     "reject_count": t._reject_count,
                 }
         try:
-            with open(filepath, "w") as f:
+            with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2)
             logger.debug("Saved proactive state for %d triggers", len(state))
         except Exception as exc:
@@ -324,7 +326,7 @@ class ProactiveEngine:
         """Restore trigger statistics from disk."""
         import json
         try:
-            with open(filepath) as f:
+            with open(filepath, encoding="utf-8") as f:
                 state = json.load(f)
             with self._lock:
                 for t in self._triggers:

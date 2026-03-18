@@ -7,6 +7,7 @@ import requests
 
 from config import RESPONSE_FILE
 from core.state import ProviderState as _ProviderState
+from core.timeouts import Timeouts
 
 MAX_CONTEXT_MESSAGES = 20  # Keep last N messages to avoid unbounded growth
 
@@ -66,7 +67,7 @@ def check_ollama_health(force=False, ollama_url=None):
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _pool:
             _fut = _pool.submit(OllamaProvider.is_available, ollama_url)
-            available = _fut.result(timeout=5)
+            available = _fut.result(timeout=Timeouts.OLLAMA_HEALTH)
     except (concurrent.futures.TimeoutError, Exception):
         available = False
     _provider_state.set_ollama_status(available)
@@ -160,12 +161,12 @@ class OllamaProvider(ChatProvider):
         """Get timeout based on model size. Larger models need more time."""
         model_lower = self.model.lower()
         if "72b" in model_lower or "70b" in model_lower:
-            return 300 if not warm else 600
+            return Timeouts.BRAIN_THINK_72B if not warm else Timeouts.BRAIN_THINK_72B * 2
         if "32b" in model_lower or "34b" in model_lower:
-            return 180 if not warm else 300
+            return Timeouts.BRAIN_THINK_32B if not warm else Timeouts.BRAIN_WARM_32B + 100
         if "14b" in model_lower or "13b" in model_lower:
-            return 90 if not warm else 150
-        return 60 if not warm else 120  # 7b and smaller
+            return Timeouts.BRAIN_THINK_14B if not warm else Timeouts.BRAIN_WARM_14B + 30
+        return Timeouts.LLM_CHAT if not warm else Timeouts.LLM_STREAM  # 7b and smaller
 
     def _call_api(self):
         # Try native Ollama endpoint first (works on all versions)
@@ -248,7 +249,7 @@ class OllamaProvider(ChatProvider):
         """Check if Ollama server is reachable."""
         base = (ollama_url or OllamaProvider.DEFAULT_BASE_URL).rstrip("/")
         try:
-            resp = requests.get(base, timeout=3)
+            resp = requests.get(base, timeout=Timeouts.OLLAMA_HEALTH)
             return resp.status_code == 200
         except Exception:
             return False
@@ -276,7 +277,7 @@ class OpenRouterProvider(ChatProvider):
                     *self.messages,
                 ],
             },
-            timeout=120,
+            timeout=Timeouts.LLM_STREAM,
         )
         response.raise_for_status()
         data = response.json()
@@ -308,7 +309,7 @@ class OpenAIProvider(ChatProvider):
                     *self.messages,
                 ],
             },
-            timeout=120,
+            timeout=Timeouts.LLM_STREAM,
         )
         response.raise_for_status()
         data = response.json()
@@ -333,7 +334,7 @@ class OpenAIProvider(ChatProvider):
                     "stream": True,
                 },
                 stream=True,
-                timeout=120,
+                timeout=Timeouts.LLM_STREAM,
             )
             response.raise_for_status()
             for line in response.iter_lines():
@@ -408,7 +409,7 @@ class AnthropicProvider(ChatProvider):
                 "anthropic-beta": "prompt-caching-2024-07-16",
             },
             json=payload,
-            timeout=120,
+            timeout=Timeouts.LLM_STREAM,
         )
         response.raise_for_status()
         data = response.json()
@@ -450,7 +451,7 @@ class AnthropicProvider(ChatProvider):
                     "stream": True,
                 },
                 stream=True,
-                timeout=120,
+                timeout=Timeouts.LLM_STREAM,
             )
             response.raise_for_status()
             for line in response.iter_lines():

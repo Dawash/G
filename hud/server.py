@@ -28,6 +28,11 @@ from typing import Set
 
 logger = logging.getLogger(__name__)
 
+try:
+    from core.timeouts import Timeouts
+except ImportError:
+    Timeouts = None  # type: ignore
+
 # ── optional FastAPI / uvicorn ────────────────────────────────────────────────
 try:
     import uvicorn

@@ -41,6 +41,8 @@ def _get_memory_store():
         _memory_store_cache = MemoryStore()
     return _memory_store_cache
 
+from core.timeouts import Timeouts
+
 from brain_defs import (
     build_tool_definitions,
     _TERMINAL_BLOCKED, _TERMINAL_ADMIN_REQUIRED, _FILE_BLOCKED_DIRS,
@@ -380,7 +382,7 @@ def _play_music(action, query=None, app="spotify"):
                             quick_chat_fn=quick_chat_fn)
 
 
-def _run_agent_with_timeout(goal, timeout=180, blocking=True):
+def _run_agent_with_timeout(goal, timeout=Timeouts.AGENT_DEFAULT, blocking=True):
     """Run desktop agent with a timeout to prevent blocking Ollama.
 
     If blocking=False, fires agent in background thread and returns immediately.
@@ -1336,11 +1338,11 @@ def _execute_tool_inner(tool_name, arguments, action_registry, reminder_mgr=None
             try:
                 with ThreadPoolExecutor(max_workers=1) as pool:
                     future = pool.submit(agent.execute, goal)
-                    result = future.result(timeout=180)
+                    result = future.result(timeout=Timeouts.AGENT_DEFAULT)
                 return result or "Task completed."
             except FuturesTimeout:
                 agent.cancel()  # Signal agent to stop — frees Ollama
-                logger.warning(f"agent_task timed out after 180s: {goal[:60]}")
+                logger.warning(f"agent_task timed out after {Timeouts.AGENT_DEFAULT}s: {goal[:60]}")
                 return "Task took too long. Some steps may have completed."
 
         # spawn_agents, chain_tasks, reason_deeply, delegate_task handlers removed
@@ -1453,7 +1455,7 @@ def _auto_escalate_to_agent(tool_name, arguments, what_done, what_missing, user_
     if action_registry:
         execute_tool._action_registry = action_registry
     # Run agent to finish the partially completed task
-    result = _run_agent_with_timeout(goal, timeout=120, blocking=True)
+    result = _run_agent_with_timeout(goal, timeout=Timeouts.AGENT_ESCALATION, blocking=True)
     _brain_state.reset_escalation()
     if result:
         return result
@@ -2621,7 +2623,7 @@ class Brain:
                 _jarvis_mode = "agent" if _has_connector else "quick"
         if _jarvis_engine and _jarvis_mode in ("agent", "research"):
             try:
-                jarvis_result = _jarvis_engine.run(user_input, timeout=45)
+                jarvis_result = _jarvis_engine.run(user_input, timeout=Timeouts.JARVIS_TASK)
                 if jarvis_result:
                     logger.info(f"JARVIS handled: {user_input[:50]}")
                     self._ctx.append({"role": "user", "content": user_input})
@@ -3440,17 +3442,17 @@ class Brain:
         if self.provider_name == "ollama":
             _model_lower = (self.ollama_model or "").lower()
             if any(s in _model_lower for s in ("72b", "70b")):
-                _warm_timeout = 300  # 70B+ models: 5 min
+                _warm_timeout = Timeouts.BRAIN_WARM_72B
             elif any(s in _model_lower for s in ("32b", "27b")):
-                _warm_timeout = 200  # 32B models: 3.3 min
+                _warm_timeout = Timeouts.BRAIN_WARM_32B
             elif any(s in _model_lower for s in ("14b", "13b")):
-                _warm_timeout = 120  # 14B models: 2 min
+                _warm_timeout = Timeouts.BRAIN_WARM_14B
             else:
-                _warm_timeout = 90   # 7B and smaller: 1.5 min
-            timeout = (5, 240) if not hasattr(self, '_ollama_warmed') else (5, _warm_timeout)
+                _warm_timeout = Timeouts.BRAIN_WARM_7B
+            timeout = (5, Timeouts.OLLAMA_KEEPALIVE) if not hasattr(self, '_ollama_warmed') else (5, _warm_timeout)
             self._ollama_warmed = True
         else:
-            timeout = 15
+            timeout = Timeouts.LLM_CHAT_FAST
 
         try:
             if self.provider_name == "ollama":
@@ -3604,7 +3606,7 @@ class Brain:
                 "anthropic-beta": "prompt-caching-2024-07-16",
             },
             json=payload,
-            timeout=120,
+            timeout=Timeouts.LLM_STREAM,
         )
         response.raise_for_status()
         data = response.json()
@@ -3677,7 +3679,7 @@ class Brain:
                     "prompt": "",
                     "keep_alive": -1,
                 },
-                timeout=180,
+                timeout=Timeouts.BRAIN_THINK_32B,
             )
             self._ollama_warmed = True
             logger.info(f"Ollama {self.ollama_model} warm-up complete")
@@ -3688,7 +3690,7 @@ class Brain:
         # On GPUs with limited VRAM, multiple loaded models cause swapping
         def _cleanup_models():
             try:
-                resp = requests.get(f"{self.ollama_url}/api/ps", timeout=5)
+                resp = requests.get(f"{self.ollama_url}/api/ps", timeout=Timeouts.OLLAMA_HEALTH)
                 if resp.status_code == 200:
                     running = resp.json().get("models", [])
                     for m in running:
@@ -3698,7 +3700,7 @@ class Brain:
                             requests.post(
                                 f"{self.ollama_url}/api/generate",
                                 json={"model": m_name, "keep_alive": 0},
-                                timeout=10,
+                                timeout=Timeouts.LLM_VALIDATION,
                             )
             except Exception:
                 pass
@@ -3732,13 +3734,13 @@ class Brain:
                 # Timeout scales by model size (32b needs ~40s even for short responses)
                 _model_lower = (self.ollama_model or "").lower()
                 if any(s in _model_lower for s in ("72b", "70b")):
-                    _qc_timeout = 120
+                    _qc_timeout = Timeouts.BRAIN_QC_72B
                 elif any(s in _model_lower for s in ("32b", "27b")):
-                    _qc_timeout = 90
+                    _qc_timeout = Timeouts.BRAIN_QC_32B
                 elif any(s in _model_lower for s in ("14b", "13b")):
-                    _qc_timeout = 45
+                    _qc_timeout = Timeouts.BRAIN_QC_14B
                 else:
-                    _qc_timeout = 20
+                    _qc_timeout = Timeouts.BRAIN_QC_7B
                 resp = requests.post(
                     f"{self.ollama_url}/api/chat",
                     json={
@@ -3775,7 +3777,7 @@ class Brain:
                         "max_tokens": 100,
                         "temperature": 0.8,
                     },
-                    timeout=10,
+                    timeout=Timeouts.HTTP_REQUEST,
                 )
                 resp.raise_for_status()
                 content = resp.json()["choices"][0]["message"]["content"]
@@ -3801,7 +3803,7 @@ class Brain:
                         ],
                         "messages": [{"role": "user", "content": prompt}],
                     },
-                    timeout=30,
+                    timeout=Timeouts.AGENT_STEP,
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -3917,7 +3919,7 @@ class Brain:
                     "options": {"num_predict": 200, "temperature": 0.5},
                 },
                 stream=True,
-                timeout=45,
+                timeout=Timeouts.BRAIN_STREAM_OLLAMA,
             )
 
             buffer = ""
@@ -3993,7 +3995,7 @@ class Brain:
                     "messages": [{"role": "user", "content": prompt}],
                 },
                 stream=True,
-                timeout=60,
+                timeout=Timeouts.BRAIN_STREAM_ANTHROPIC,
             )
             resp.raise_for_status()
 
@@ -4181,7 +4183,7 @@ class Brain:
                     ],
                     "messages": [{"role": "user", "content": prompt}],
                 },
-                timeout=120,
+                timeout=Timeouts.LLM_STREAM,
             )
             resp.raise_for_status()
             data = resp.json()
